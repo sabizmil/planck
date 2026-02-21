@@ -35,17 +35,19 @@ type PTYBackend struct {
 	sessionsDir    string
 	escapeKey      string
 	scrollbackLines int
+	extraArgs      []string
 	mu             sync.Mutex
 	sessions       map[string]*PTYSession
 }
 
 // NewPTYBackend creates a new PTY backend
-func NewPTYBackend(prefix, sessionsDir string) *PTYBackend {
+func NewPTYBackend(prefix, sessionsDir string, extraArgs []string) *PTYBackend {
 	return &PTYBackend{
 		prefix:          prefix,
 		sessionsDir:     sessionsDir,
 		escapeKey:       `ctrl+\`,
 		scrollbackLines: 1000,
+		extraArgs:       extraArgs,
 		sessions:        make(map[string]*PTYSession),
 	}
 }
@@ -77,17 +79,16 @@ func (p *PTYBackend) Launch(ctx context.Context, taskID string, prompt string) (
 	var cmd *exec.Cmd
 	var promptFile string
 
+	args := append([]string{}, p.extraArgs...)
 	if prompt != "" {
 		// Write prompt to temp file
 		promptFile = filepath.Join(p.sessionsDir, fmt.Sprintf("%s-prompt.md", id))
 		if err := os.WriteFile(promptFile, []byte(prompt), 0600); err != nil {
 			return nil, fmt.Errorf("write prompt file: %w", err)
 		}
-		cmd = exec.CommandContext(ctx, "claude", "--system-prompt-file", promptFile)
-	} else {
-		// Launch interactive Claude session without system prompt
-		cmd = exec.CommandContext(ctx, "claude")
+		args = append(args, "--system-prompt-file", promptFile)
 	}
+	cmd = exec.CommandContext(ctx, "claude", args...)
 
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 

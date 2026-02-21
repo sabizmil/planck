@@ -112,11 +112,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create session backend
+	// Create session backend, passing through interactive-safe agent flags
+	_, agentCfg := cfg.GetDefaultAgent()
+	var sessionArgs []string
+	for _, arg := range agentCfg.PlanningArgs {
+		switch arg {
+		case "--dangerously-skip-permissions":
+			sessionArgs = append(sessionArgs, arg)
+		}
+	}
 	backend, err := session.NewBackend(session.BackendConfig{
 		Backend:     cfg.Session.Backend,
 		Prefix:      cfg.Preferences.TmuxPrefix,
 		SessionsDir: cfg.SessionsDir(),
+		ExtraArgs:   sessionArgs,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating session backend: %v\n", err)

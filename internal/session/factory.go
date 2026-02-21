@@ -12,6 +12,8 @@ type BackendConfig struct {
 	Prefix string
 	// SessionsDir is the directory for session-related files
 	SessionsDir string
+	// ExtraArgs are additional CLI arguments passed to claude
+	ExtraArgs []string
 }
 
 // NewBackend creates a session backend based on configuration
@@ -19,7 +21,7 @@ func NewBackend(cfg BackendConfig) (Backend, error) {
 	switch cfg.Backend {
 	case "pty", "auto", "":
 		// Always use PTY backend
-		backend := NewPTYBackend(cfg.Prefix, cfg.SessionsDir)
+		backend := NewPTYBackend(cfg.Prefix, cfg.SessionsDir, cfg.ExtraArgs)
 		if !backend.IsAvailable() {
 			return nil, fmt.Errorf("PTY backend not available: claude CLI not found")
 		}
