@@ -67,15 +67,20 @@ func main() {
 		}
 	}
 
-	// If no folder specified, show folder picker
+	// If no folder specified, reopen last folder or show picker
 	if folder == "" {
-		folder, err = runFolderPicker(recent.Folders)
-		if err != nil {
-			if err.Error() == "quit" {
-				os.Exit(0)
+		if len(recent.Folders) > 0 {
+			// Reopen the most recently used folder
+			folder = recent.Folders[0]
+		} else {
+			folder, err = runFolderPicker(recent.Folders)
+			if err != nil {
+				if err.Error() == "quit" {
+					os.Exit(0)
+				}
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
 			}
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
 		}
 	}
 
