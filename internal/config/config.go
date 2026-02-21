@@ -67,7 +67,7 @@ func DefaultConfig() *Config {
 		Agents: map[string]AgentConfig{
 			"claude-code": {
 				Command:            "claude",
-				PlanningArgs:       []string{"-p", "--output-format", "stream-json", "--verbose"},
+				PlanningArgs:       []string{"-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"},
 				ImplementationArgs: []string{},
 				Default:            true,
 			},
