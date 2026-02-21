@@ -1,0 +1,58 @@
+# Binaries
+/build/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+coverage.out
+coverage.html
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+.planck/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Root binary (built outside build/)
+/planck
+
+# Documentation - not tracked (living docs managed locally)
+docs/PRD/
+test-plans/
+planck-spec.md
+
+# Claude Code working files
+.claude/plans/
+
+# Air (hot reload)
+tmp/
+
+# GoReleaser
+dist/

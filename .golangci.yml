@@ -1,0 +1,61 @@
+# golangci-lint configuration
+# https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - unparam
+    - gocritic
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: false
+
+  govet:
+    check-shadowing: false
+
+  gofmt:
+    simplify: true
+
+  goimports:
+    local-prefixes: github.com/anthropics/planck
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+    disabled-checks:
+      - commentFormatting
+
+  misspell:
+    locale: US
+
+issues:
+  exclude-rules:
+    # Exclude test files from some checks
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gocritic
+
+    # Allow unused parameters in interface implementations
+    - linters:
+        - unparam
+      text: "always receives"
+
+  max-issues-per-linter: 0
+  max-same-issues: 0
