@@ -86,11 +86,6 @@ func (w *Workspace) Refresh() error {
 			return nil // skip entries we can't access
 		}
 
-		// Skip hidden directories
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
-			return fs.SkipDir
-		}
-
 		if d.IsDir() {
 			return nil
 		}
@@ -318,9 +313,6 @@ func (w *Workspace) Watch() (<-chan struct{}, error) {
 			return nil
 		}
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && path != w.folder {
-				return fs.SkipDir
-			}
 			_ = watcher.Add(path)
 		}
 		return nil
