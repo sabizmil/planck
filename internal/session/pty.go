@@ -28,6 +28,7 @@ type PTYSession struct {
 	exitCode   int
 	exited     bool
 	promptFile string // Temporary prompt file to clean up
+	title      string // Window title set by child via OSC 0/2
 }
 
 // PTYBackend implements Backend using in-process PTY
@@ -126,13 +127,6 @@ func (p *PTYBackend) LaunchCommand(ctx context.Context, workDir, command string,
 	terminal := vt.NewEmulator(80, 24)
 
 	scrollback := NewScrollbackBuffer(p.scrollbackLines)
-	terminal.SetCallbacks(vt.Callbacks{
-		ScrollOff: func(lines []string, altScreen bool) {
-			if !altScreen {
-				scrollback.Push(lines)
-			}
-		},
-	})
 
 	ptySess := &PTYSession{
 		id:         id,
@@ -144,6 +138,18 @@ func (p *PTYBackend) LaunchCommand(ctx context.Context, workDir, command string,
 		done:       make(chan struct{}),
 		promptFile: promptFile,
 	}
+
+	terminal.SetCallbacks(vt.Callbacks{
+		ScrollOff: func(lines []string, altScreen bool) {
+			if !altScreen {
+				scrollback.Push(lines)
+			}
+		},
+		Title: func(title string) {
+			// Called from terminal.Write() which is already under ptySess.mu
+			ptySess.title = title
+		},
+	})
 
 	// Background reader: PTY master → vt.Terminal
 	go ptySess.readLoop()
@@ -393,6 +399,19 @@ func (p *PTYBackend) Write(handle string, data []byte) error {
 
 	_, err := sess.master.Write(data)
 	return err
+}
+
+// GetTitle returns the window title set by the child process via OSC 0/2
+func (p *PTYBackend) GetTitle(handle string) string {
+	sess := p.getSession(handle)
+	if sess == nil {
+		return ""
+	}
+
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	return sess.title
 }
 
 // GetTerminal returns the terminal state for rendering

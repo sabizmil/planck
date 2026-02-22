@@ -77,8 +77,8 @@ func (p *PTYPanel) Update(msg tea.Msg) (*PTYPanel, tea.Cmd) {
 				p.scrollOffset = 0
 			}
 
-			// Tab is for tab-switching, not forwarded to PTY
-			if msg.Type == tea.KeyTab {
+			// Tab/Shift+Tab is for tab-switching, not forwarded to PTY
+			if msg.Type == tea.KeyTab || msg.Type == tea.KeyShiftTab {
 				return p, nil
 			}
 
@@ -161,6 +161,7 @@ type PTYWriteMsg struct {
 type PTYRenderMsg struct {
 	SessionID string
 	Content   string
+	Title     string // Window title set by child process via OSC escape sequences
 }
 
 // PTYExitedMsg signals the PTY process has exited

@@ -16,6 +16,7 @@ type Config struct {
 	Execution     Execution              `toml:"execution"`
 	Planning      Planning               `toml:"planning"`
 	Session       Session                `toml:"session"`
+	MarkdownStyle MarkdownStyle          `toml:"markdown_style"`
 
 	// Runtime fields (not from config file)
 	WorkDir    string `toml:"-"`
@@ -35,6 +36,12 @@ type AgentConfig struct {
 type Preferences struct {
 	Editor     string `toml:"editor"`
 	TmuxPrefix string `toml:"tmux_prefix"`
+}
+
+// MarkdownStyle configures the markdown rendering style
+type MarkdownStyle struct {
+	Theme     string            `toml:"theme"`     // global theme name
+	Overrides map[string]string `toml:"overrides"` // element → theme name
 }
 
 // Notifications configures the notification system
@@ -73,6 +80,12 @@ func DefaultConfig() *Config {
 				ImplementationArgs: []string{},
 				Default:            true,
 			},
+			"codex": {
+				Command:      "codex",
+				Label:        "Codex",
+				PlanningArgs: []string{"--full-auto"},
+				Default:      false,
+			},
 		},
 		Preferences: Preferences{
 			Editor:     "",
@@ -91,6 +104,10 @@ func DefaultConfig() *Config {
 		},
 		Session: Session{
 			Backend: "auto",
+		},
+		MarkdownStyle: MarkdownStyle{
+			Theme:     "neo-brutalist",
+			Overrides: map[string]string{},
 		},
 	}
 }

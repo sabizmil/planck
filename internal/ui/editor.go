@@ -22,6 +22,9 @@ type Editor struct {
 	theme    *Theme
 	renderer *glamour.TermRenderer
 
+	// Style state for rebuilding renderer on resize
+	styleJSON []byte
+
 	// Content
 	fileName    string
 	content     string
@@ -52,10 +55,7 @@ type Editor struct {
 
 // NewEditor creates a new editor
 func NewEditor(theme *Theme) *Editor {
-	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(80),
-	)
+	renderer, _ := NewMarkdownRenderer(80)
 
 	return &Editor{
 		theme:    theme,
@@ -625,13 +625,27 @@ func (e *Editor) SetSize(width, height int) {
 
 	// Update renderer word wrap
 	if e.renderer != nil {
-		e.renderer, _ = glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
-			glamour.WithWordWrap(width-8),
-		)
+		if e.styleJSON != nil {
+			e.renderer, _ = NewMarkdownRendererWithStyle(e.styleJSON, width-8)
+		} else {
+			e.renderer, _ = NewMarkdownRenderer(width - 8)
+		}
 		if e.mode == EditorModeView {
 			e.renderContent()
 		}
+	}
+}
+
+// SetMarkdownStyle replaces the renderer with a new style and re-renders.
+func (e *Editor) SetMarkdownStyle(styleJSON []byte) {
+	e.styleJSON = styleJSON
+	width := e.width - 8
+	if width < 20 {
+		width = 80
+	}
+	e.renderer, _ = NewMarkdownRendererWithStyle(styleJSON, width)
+	if e.mode == EditorModeView {
+		e.renderContent()
 	}
 }
 

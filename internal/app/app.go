@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -34,6 +36,7 @@ type AgentTab struct {
 	id          string // unique tab ID
 	agentKey    string // config key (e.g., "claude-code")
 	baseLabel   string // display label from config (e.g., "Claude")
+	customTitle string // title set by child process via OSC escape sequences
 	instanceNum int    // per-type instance number (1, 2, ...)
 	session     *session.Session
 	panel       *ui.PTYPanel
@@ -59,6 +62,10 @@ type App struct {
 	editor   *ui.Editor
 	dialog   *ui.Dialog
 	help     *ui.Help
+	settings *ui.Settings
+
+	// Style state
+	styleRegistry *ui.StyleRegistry
 
 	// Overlays
 	folderPicker        *ui.FolderPicker
@@ -68,6 +75,9 @@ type App struct {
 	agentTabs      []*AgentTab    // ordered list of agent tabs
 	activeTabIdx   int            // 0 = planning, 1+ = agent tabs
 	nextInstanceNum map[string]int // per-agent-type instance counter
+
+	// Deferred agent launch (set by dialog callback, consumed by Update)
+	pendingAgentKey string
 
 	// Current state
 	focus         Focus
@@ -99,6 +109,14 @@ func New(cfg *config.Config, configDir, folder string, backend *session.PTYBacke
 	// Create theme and UI components
 	theme := ui.DefaultTheme()
 
+	// Build style registry and load persisted config
+	registry := ui.NewStyleRegistry()
+	styleCfg := loadMarkdownStyleFromConfig(cfg)
+	styleJSON := registry.ComposeStyle(styleCfg)
+
+	editor := ui.NewEditor(theme)
+	editor.SetMarkdownStyle(styleJSON)
+
 	app := &App{
 		config:          cfg,
 		configDir:       configDir,
@@ -109,9 +127,11 @@ func New(cfg *config.Config, configDir, folder string, backend *session.PTYBacke
 		theme:           theme,
 		tabs:            ui.NewTabBar(theme),
 		fileList:        ui.NewFileList(theme),
-		editor:          ui.NewEditor(theme),
+		editor:          editor,
 		dialog:          ui.NewDialog(theme),
 		help:            ui.NewHelp(theme),
+		settings:        ui.NewSettings(theme, registry, styleCfg),
+		styleRegistry:   registry,
 		activeTabIdx:    0,
 		focus:           FocusFileList,
 		nextInstanceNum: make(map[string]int),
@@ -244,36 +264,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Dialog takes priority
-	if a.dialog.IsVisible() {
-		dialog, cmd := a.dialog.Update(msg)
-		a.dialog = dialog
-		return a, cmd
-	}
-
-	// Help takes priority
-	if a.help.IsVisible() {
-		help, cmd := a.help.Update(msg)
-		a.help = help
-		return a, cmd
-	}
-
-	// Folder picker overlay takes priority
-	if a.folderPickerVisible {
-		if _, ok := msg.(ui.FolderSelectedMsg); ok {
-			a.folderPickerVisible = false
-			return a, a.switchFolder(msg.(ui.FolderSelectedMsg).Folder)
+	// Handle markdown style changes from settings panel
+	if msg, ok := msg.(ui.MarkdownStyleChangedMsg); ok {
+		a.editor.SetMarkdownStyle(msg.StyleJSON)
+		a.config.MarkdownStyle.Theme = string(msg.Config.GlobalTheme)
+		a.config.MarkdownStyle.Overrides = make(map[string]string)
+		for elem, theme := range msg.Config.Overrides {
+			a.config.MarkdownStyle.Overrides[string(elem)] = string(theme)
 		}
-		if _, ok := msg.(ui.FolderPickerCancelledMsg); ok {
-			a.folderPickerVisible = false
-			return a, nil
-		}
-		picker, cmd := a.folderPicker.Update(msg)
-		a.folderPicker = picker
-		return a, cmd
+		_ = a.config.Save()
+		a.message = "Markdown style updated"
+		return a, nil
 	}
 
-	// Handle PTY messages — route to the correct agent tab by session ID
+	// Handle PTY messages BEFORE overlay checks — polling must never be
+	// interrupted by dialogs, help, or folder picker, otherwise the polling
+	// chain breaks and the tab goes permanently silent.
 	if msg, ok := msg.(ui.PTYWriteMsg); ok {
 		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
 			a.sessionBackend.Write(tab.session.BackendHandle, msg.Data)
@@ -283,6 +289,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(ui.PTYRenderMsg); ok {
 		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
 			tab.panel.SetContent(msg.Content)
+			// Update tab title if the child process set a meaningful one via OSC.
+			// Once we have a good title, keep it — don't let resets overwrite it.
+			if title := sanitizeTabTitle(msg.Title); title != "" && title != tab.customTitle {
+				tab.customTitle = title
+				a.syncTabBar()
+			}
 			cmds = append(cmds, a.pollAgentTab(tab))
 		}
 	}
@@ -293,6 +305,75 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.syncTabBar()
 			a.message = fmt.Sprintf("%s completed (exit code: %d)", tab.baseLabel, msg.ExitCode)
 		}
+	}
+
+	// Dialog takes priority
+	if a.dialog.IsVisible() {
+		dialog, cmd := a.dialog.Update(msg)
+		a.dialog = dialog
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		// If dialog just closed and set a pending agent, launch it now
+		if !a.dialog.IsVisible() && a.pendingAgentKey != "" {
+			key := a.pendingAgentKey
+			a.pendingAgentKey = ""
+			if cmd := a.launchAgentTab(key); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		return a, tea.Batch(cmds...)
+	}
+
+	// Launch pending agent (safety net for non-dialog code paths)
+	if a.pendingAgentKey != "" {
+		key := a.pendingAgentKey
+		a.pendingAgentKey = ""
+		if cmd := a.launchAgentTab(key); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
+	// Help takes priority
+	if a.help.IsVisible() {
+		help, cmd := a.help.Update(msg)
+		a.help = help
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return a, tea.Batch(cmds...)
+	}
+
+	// Settings takes priority
+	if a.settings.IsVisible() {
+		settings, cmd := a.settings.Update(msg)
+		a.settings = settings
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return a, tea.Batch(cmds...)
+	}
+
+	// Folder picker overlay takes priority
+	if a.folderPickerVisible {
+		if _, ok := msg.(ui.FolderSelectedMsg); ok {
+			a.folderPickerVisible = false
+			cmd := a.switchFolder(msg.(ui.FolderSelectedMsg).Folder)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return a, tea.Batch(cmds...)
+		}
+		if _, ok := msg.(ui.FolderPickerCancelledMsg); ok {
+			a.folderPickerVisible = false
+			return a, tea.Batch(cmds...)
+		}
+		picker, cmd := a.folderPicker.Update(msg)
+		a.folderPicker = picker
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return a, tea.Batch(cmds...)
 	}
 
 	// Handle mouse events on planning tab
@@ -391,7 +472,13 @@ func (a *App) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 		if a.editor.Mode() == ui.EditorModeEdit {
 			return nil
 		}
-		return a.cycleTab()
+		return a.cycleTab(1)
+
+	case "shift+tab":
+		if a.editor.Mode() == ui.EditorModeEdit {
+			return nil
+		}
+		return a.cycleTab(-1)
 
 	case "ctrl+x":
 		// Close agent tab — works even in input mode
@@ -401,6 +488,16 @@ func (a *App) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 			}
 			return a.closeCurrentAgentTab()
 		}
+		return nil
+
+	case "s":
+		if a.editor.Mode() == ui.EditorModeEdit {
+			return nil
+		}
+		if a.isInPTYInputMode() {
+			return nil
+		}
+		a.settings.Toggle()
 		return nil
 
 	case "a":
@@ -442,8 +539,8 @@ func (a *App) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// cycleTab cycles to the next tab
-func (a *App) cycleTab() tea.Cmd {
+// cycleTab cycles to the next (+1) or previous (-1) tab
+func (a *App) cycleTab(direction int) tea.Cmd {
 	totalTabs := 1 + len(a.agentTabs) // planning + agents
 	if totalTabs <= 1 {
 		return nil // Only planning tab, nowhere to cycle
@@ -454,7 +551,7 @@ func (a *App) cycleTab() tea.Cmd {
 		panel.ExitInputMode()
 	}
 
-	next := (a.activeTabIdx + 1) % totalTabs
+	next := (a.activeTabIdx + direction + totalTabs) % totalTabs
 	return a.switchToTab(next)
 }
 
@@ -526,7 +623,7 @@ func (a *App) createAgentTab() tea.Cmd {
 
 	a.dialog.ShowSelect("New Agent", options, func(result ui.DialogResult) {
 		if result.Confirmed && result.Selected >= 0 && result.Selected < len(agentKeys) {
-			a.launchAgentTab(agentKeys[result.Selected])
+			a.pendingAgentKey = agentKeys[result.Selected]
 		}
 	})
 
@@ -583,7 +680,7 @@ func (a *App) launchAgentTab(agentKey string) tea.Cmd {
 	var launchArgs []string
 	for _, arg := range agentCfg.PlanningArgs {
 		switch arg {
-		case "--dangerously-skip-permissions":
+		case "--dangerously-skip-permissions", "--full-auto":
 			launchArgs = append(launchArgs, arg)
 		}
 	}
@@ -691,9 +788,21 @@ func (a *App) removeAgentTab(tab *AgentTab) {
 	a.tabs.SetActiveIdx(a.activeTabIdx)
 }
 
-// computeTabLabel returns the display label for an agent tab,
-// including instance number if there are multiple tabs of the same type
+// maxTabTitleLen is the maximum rune length for tab titles
+const maxTabTitleLen = 30
+
+// computeTabLabel returns the display label for an agent tab.
+// It prefers the custom title set by the child process via OSC escape
+// sequences, falling back to the base label with instance number.
 func (a *App) computeTabLabel(tab *AgentTab) string {
+	if tab.customTitle != "" {
+		title := tab.customTitle
+		if utf8.RuneCountInString(title) > maxTabTitleLen {
+			runes := []rune(title)
+			title = string(runes[:maxTabTitleLen-1]) + "..."
+		}
+		return title
+	}
 	count := 0
 	for _, t := range a.agentTabs {
 		if t.agentKey == tab.agentKey {
@@ -704,6 +813,36 @@ func (a *App) computeTabLabel(tab *AgentTab) string {
 		return fmt.Sprintf("%s #%d", tab.baseLabel, tab.instanceNum)
 	}
 	return tab.baseLabel
+}
+
+// minTabTitleLen is the minimum rune length for a title to be considered useful.
+// Shorter values (e.g. single characters, emoji, program names like "~") are
+// treated as resets and ignored.
+const minTabTitleLen = 3
+
+// sanitizeTabTitle cleans an OSC-provided title, stripping non-printable and
+// zero-width characters and returning "" for values that aren't useful as tab
+// labels.
+func sanitizeTabTitle(raw string) string {
+	if raw == "" {
+		return ""
+	}
+
+	// Strip non-printable, control, and zero-width / format characters
+	var sb strings.Builder
+	for _, r := range raw {
+		if unicode.IsPrint(r) && !unicode.Is(unicode.Cf, r) {
+			sb.WriteRune(r)
+		}
+	}
+	title := strings.TrimSpace(sb.String())
+
+	// Reject if too short to be useful
+	if utf8.RuneCountInString(title) < minTabTitleLen {
+		return ""
+	}
+
+	return title
 }
 
 // syncTabBar rebuilds the tab bar to match current agent tabs
@@ -771,7 +910,10 @@ func (a *App) pollAgentTab(tab *AgentTab) tea.Cmd {
 			return ui.PTYRenderMsg{SessionID: sessionID, Content: ""}
 		}
 
-		return ui.PTYRenderMsg{SessionID: sessionID, Content: content}
+		// Get window title (set by child process via OSC 0/2 escape sequences)
+		title := backend.GetTitle(handle)
+
+		return ui.PTYRenderMsg{SessionID: sessionID, Content: content, Title: title}
 	}
 }
 
@@ -853,6 +995,20 @@ func (a *App) handlePlanningTabKey(key string, msg tea.KeyMsg) tea.Cmd {
 		case "h", "left":
 			if a.fileList.IsSelectedDir() {
 				a.fileList.CollapseSelected()
+			}
+
+		case "c":
+			// Toggle file completion status
+			if file := a.fileList.SelectedFile(); file != nil {
+				if err := a.workspace.ToggleFileStatus(file.Name); err != nil {
+					a.message = fmt.Sprintf("Error: %v", err)
+				} else {
+					a.refreshFiles()
+					// Reload editor if this file is currently displayed
+					if a.editor.FileName() == file.Name {
+						a.loadFile(file.Name)
+					}
+				}
 			}
 
 		case "o":
@@ -964,6 +1120,11 @@ func (a *App) View() string {
 		view = a.help.View()
 	}
 
+	// Overlay settings if visible
+	if a.settings.IsVisible() {
+		view = a.settings.View()
+	}
+
 	// Overlay folder picker if visible
 	if a.folderPickerVisible && a.folderPicker != nil {
 		view = a.folderPicker.View()
@@ -986,7 +1147,7 @@ func (a *App) renderStatusBar() string {
 			if a.editor.Mode() == ui.EditorModeEdit {
 				leftContent = a.theme.KeyHint.Render("[Esc] save & exit  [Ctrl+S] save")
 			} else {
-				leftContent = a.theme.KeyHint.Render("[^|v] navigate  [e] edit  [n] new  [d] delete  [o] folder  [a] agent  [Tab] cycle")
+				leftContent = a.theme.KeyHint.Render("[^|v] navigate  [e] edit  [n] new  [d] delete  [o] folder  [a] agent  [s] settings  [Tab] cycle")
 			}
 		} else {
 			panel := a.activePanel()
@@ -1031,6 +1192,7 @@ func (a *App) updateSizes() {
 	a.editor.SetPosition(fileListWidth+1, 2) // +1 for border, 2 for tab bar
 	a.dialog.SetSize(a.width, a.height)
 	a.help.SetSize(a.width, a.height)
+	a.settings.SetSize(a.width, a.height)
 	if a.folderPicker != nil {
 		a.folderPicker.SetSize(a.width, a.height)
 	}
@@ -1194,4 +1356,19 @@ func (m *FolderPickerModel) View() string {
 		m.picker.SetSize(m.width-4, m.height-4)
 	}
 	return m.picker.View()
+}
+
+// loadMarkdownStyleFromConfig converts config.MarkdownStyle to ui.MarkdownStyleConfig
+func loadMarkdownStyleFromConfig(cfg *config.Config) ui.MarkdownStyleConfig {
+	result := ui.MarkdownStyleConfig{
+		GlobalTheme: ui.ThemeName(cfg.MarkdownStyle.Theme),
+		Overrides:   make(map[ui.ElementType]ui.ThemeName),
+	}
+	if result.GlobalTheme == "" {
+		result.GlobalTheme = ui.ThemeNeoBrutalist
+	}
+	for elem, theme := range cfg.MarkdownStyle.Overrides {
+		result.Overrides[ui.ElementType(elem)] = ui.ThemeName(theme)
+	}
+	return result
 }

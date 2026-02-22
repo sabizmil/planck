@@ -102,10 +102,11 @@ func (h *Help) renderHelpContent() string {
 	sb.WriteString(h.theme.Title.Render("Global"))
 	sb.WriteString("\n")
 	sb.WriteString(h.renderKeySection([][]string{
-		{"Tab", "Cycle through tabs"},
+		{"Tab / Shift+Tab", "Cycle through tabs"},
 		{"1-9", "Jump to tab by number"},
 		{"a", "Create new agent tab"},
 		{"x / Ctrl+X", "Close current agent tab"},
+		{"s", "Settings"},
 		{"?", "Toggle this help"},
 		{"q / Ctrl+c", "Quit"},
 	}))
@@ -122,6 +123,7 @@ func (h *Help) renderHelpContent() string {
 		{"← / h", "Collapse folder"},
 		{"e", "Enter edit mode"},
 		{"n", "New file"},
+		{"c", "Toggle complete"},
 		{"d", "Delete file"},
 		{"o", "Switch folder"},
 	}))
@@ -143,7 +145,7 @@ func (h *Help) renderHelpContent() string {
 		{"Ctrl+\\", "Exit to normal mode"},
 		{"Ctrl+X", "Close tab"},
 		{"Scroll", "Browse output history"},
-		{"Tab", "Cycle tabs"},
+		{"Tab / Shift+Tab", "Cycle tabs"},
 	}))
 	sb.WriteString("\n")
 

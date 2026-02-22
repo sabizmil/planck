@@ -286,6 +286,72 @@ func (w *Workspace) CreateFile(name string) error {
 	return w.Refresh()
 }
 
+// ToggleFileStatus toggles a file's status between completed and pending.
+// If the file is currently completed, it becomes pending; otherwise it becomes completed.
+// The status is persisted by updating the YAML frontmatter in the file.
+func (w *Workspace) ToggleFileStatus(name string) error {
+	f := w.GetFile(name)
+	if f == nil {
+		return fmt.Errorf("file not found: %s", name)
+	}
+
+	content, err := os.ReadFile(f.Path)
+	if err != nil {
+		return fmt.Errorf("read file: %w", err)
+	}
+
+	newStatus := "completed"
+	if f.Status == StatusCompleted {
+		newStatus = "pending"
+	}
+
+	updated := setFrontmatterStatus(string(content), newStatus)
+
+	if err := os.WriteFile(f.Path, []byte(updated), 0644); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+
+	return w.Refresh()
+}
+
+// setFrontmatterStatus updates or inserts the status field in YAML frontmatter.
+func setFrontmatterStatus(content, status string) string {
+	lines := strings.Split(content, "\n")
+
+	// Check if file starts with frontmatter
+	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
+		// Find closing ---
+		for i := 1; i < len(lines); i++ {
+			if strings.TrimSpace(lines[i]) == "---" {
+				// Found frontmatter block (lines[0] to lines[i])
+				// Look for existing status: line
+				found := false
+				for j := 1; j < i; j++ {
+					trimmed := strings.TrimSpace(lines[j])
+					if strings.HasPrefix(trimmed, "status:") {
+						lines[j] = "status: " + status
+						found = true
+						break
+					}
+				}
+				if !found {
+					// Insert status before closing ---
+					newLines := make([]string, 0, len(lines)+1)
+					newLines = append(newLines, lines[:i]...)
+					newLines = append(newLines, "status: "+status)
+					newLines = append(newLines, lines[i:]...)
+					lines = newLines
+				}
+				return strings.Join(lines, "\n")
+			}
+		}
+	}
+
+	// No frontmatter — prepend one
+	frontmatter := "---\nstatus: " + status + "\n---\n"
+	return frontmatter + content
+}
+
 // DeleteFile deletes a markdown file
 func (w *Workspace) DeleteFile(name string) error {
 	f := w.GetFile(name)
