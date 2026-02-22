@@ -1,15 +1,15 @@
 # Planck
 
-A terminal UI for iteratively refining plans with AI, then dispatching them to coding agents.
+A terminal UI for AI-assisted planning and task management, orchestrating multiple agent sessions in a tabbed interface.
 
 ## Overview
 
-Planck is a TUI (Terminal User Interface) that helps you:
+Planck is a TUI (Terminal User Interface) built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) that helps you:
 
-1. **Create Plans** - Start with a vague idea, iterate with AI to refine approaches
-2. **Structure Work** - Break down plans into phases and tasks
-3. **Execute Autonomously** - Dispatch tasks to AI coding agents (Claude Code, etc.)
-4. **Track Progress** - Monitor execution, receive notifications, hijack sessions
+1. **Manage Workspace Files** - Browse, create, and edit markdown files with status tracking
+2. **Run Multiple Agents** - Launch up to 8 concurrent AI agent tabs (Claude Code, Codex, etc.)
+3. **Plan & Execute** - Break down complex tasks and dispatch them to coding agents
+4. **Customize Everything** - Themes, spinners, keybindings, and per-agent configuration
 
 ## Installation
 
@@ -36,87 +36,122 @@ brew install planck
 
 ## Requirements
 
-- Go 1.22 or later
-- tmux (for interactive agent sessions)
-- Claude Code CLI (optional, for AI integration)
+- Go 1.24 or later
+- tmux (optional, for tmux-based sessions)
+- Claude Code CLI or other AI agent CLI
 
 ## Quick Start
 
-1. Navigate to your project directory:
-   ```bash
-   cd your-project
-   ```
+```bash
+# Start in the current directory
+planck
 
-2. Start planck:
-   ```bash
-   planck
-   ```
+# Or specify a project folder
+planck /path/to/project
+```
 
-3. Press `n` to create a new plan
-4. Describe your idea and let AI refine it
-5. Select approaches, review phases and tasks
-6. Press `d` to dispatch tasks to agents
+1. Planck opens to the **Planning tab** with your workspace files
+2. Press `n` to create a new markdown file
+3. Press `Enter` to open a file in the editor
+4. Press `t` to open a new agent tab and start an AI session
+5. Type your prompt and watch the agent work
+
+## Features
+
+### Multi-Agent Tabs
+
+Run up to 8 concurrent agent sessions, each in its own tab with an independent PTY. Tabs display animated activity spinners while agents are running, and auto-generate titles from your input.
+
+### Built-in Editor
+
+A full-featured markdown editor with soft word-wrapping at word boundaries. Visual continuation markers show wrapped lines. Press `Escape` to save, or view rendered markdown in read-only mode.
+
+### Workspace Browser
+
+Recursively scans for markdown files and displays them in a tree view. Track file status (pending, in-progress, completed) via YAML frontmatter. Toggle completion with `c`. File changes are detected automatically via filesystem watching.
+
+### PTY Sessions with Scrollback
+
+Agent sessions run in-process via PTY (no tmux overhead by default). A 1000-line ring buffer provides smooth scrollback with mouse wheel or keyboard navigation. Alternate screen applications (vim, less, fzf) are filtered from the buffer.
+
+### Markdown Themes
+
+Five built-in rendering themes: **Neo-Brutalist**, **Terminal Classic**, **Minimal Modern**, **Rich Editorial**, and **Soft Pastel**. Switch themes in settings with a live preview. Per-element style overrides are supported.
+
+### Configurable Spinners
+
+Choose from 26 animated spinner presets (claude, dots, line, star, flip, bounce, arc, circle, moon, hearts, clock, and more). Each has its own tick interval and animation style. Preview them live in the settings panel.
+
+### Settings Panel
+
+A composable, multi-page settings panel accessible with `s`:
+
+- **General** - Editor, terminal bell, session backend, execution preferences
+- **Agents** - Add/configure agents, set default, customize command args
+- **Markdown** - Theme selection with live preview, per-element overrides
+- **Spinner** - Scrollable preset list with animated previews
+- **Keybindings** - Reference of all keyboard shortcuts by context
+
+All changes auto-save to `config.toml`.
+
+### Notification System
+
+Terminal bell notifications on session events (planning complete, task done, errors). Configurable via settings.
 
 ## Key Bindings
 
 ### Global
 | Key | Action |
 |-----|--------|
-| `q` | Quit |
-| `?` | Show help |
-| `Tab` | Switch focus |
-| `Esc` | Cancel/close dialog |
+| `q` / `Ctrl+C` (×2) | Quit (double-tap safety) |
+| `?` | Toggle help overlay |
+| `Tab` / `Shift+Tab` | Cycle tabs forward/backward |
+| `1`–`9` | Jump to tab by number |
+| `s` | Open settings |
+| `Esc` | Cancel / close dialog |
 
-### Sidebar (Plan List)
+### File List (Planning Tab)
 | Key | Action |
 |-----|--------|
-| `n` | New plan |
-| `j/k` or `↑/↓` | Navigate |
-| `Enter` | Select plan |
-| `D` | Delete plan |
+| `j/k` or `↑/↓` | Navigate files |
+| `Enter` | Open file in editor |
+| `n` | New file |
+| `d` | Delete file |
+| `c` | Toggle file completion |
+| `t` | New agent tab |
+| `h/l` | Collapse/expand folders |
 
-### Plan Tree
+### Editor
 | Key | Action |
 |-----|--------|
-| `j/k` or `↑/↓` | Navigate |
-| `h/l` | Collapse/Expand |
-| `Enter` | View details |
-| `Space` | Toggle task status |
-| `s` | Start planning session |
-| `d` | Dispatch to agent |
-| `e` | Edit in $EDITOR |
+| `Esc` | Save and close |
+| `Ctrl+S` | Save in place |
+| Arrow keys | Navigate (respects word wrap) |
 
-### Execution
+### Agent Tab
 | Key | Action |
 |-----|--------|
-| `X` | Execute plan (scope picker) |
-| `B` | Background session |
-| `F` | Foreground session |
-| `P` | Pause execution |
-| `R` | Resume execution |
-| `C` | Cancel execution |
-
-### Session Panel
-| Key | Action |
-|-----|--------|
-| `a` | Accept changes |
-| `r` | Reject changes |
-| `Enter` | Attach to session |
+| `i` | Enter input mode |
+| `Esc` | Exit input mode |
+| `j/k` | Scroll up/down |
+| `g/G` | Jump to top/bottom |
+| `PgUp/PgDn` | Page scroll |
 
 ## Configuration
 
 Planck stores configuration in `.planck/config.toml`:
 
 ```toml
-[agents]
 [[agents]]
-name = "claude-code"
 command = "claude"
-args = ["--dangerously-skip-permissions"]
+label = "Claude"
+planning_args = ["--verbose"]
+implementation_args = ["--dangerously-skip-permissions"]
+default = true
 
 [preferences]
 editor = "vim"
-default_agent = "claude-code"
+spinner_style = "claude"
 
 [notifications]
 bell = true
@@ -124,116 +159,46 @@ bell = true
 [execution]
 default_scope = "phase"
 auto_advance = true
+permission_mode = "pre-approve"
+
+[session]
+backend = "auto"  # auto | tmux | pty
+
+[markdown_style]
+theme = "neo-brutalist"
 ```
 
 ## Architecture
 
 ```
 planck/
-├── cmd/planck/          # Entry point
+├── cmd/planck/          # Entry point, folder picker, version info
 ├── internal/
-│   ├── app/             # Main application (Bubble Tea model)
-│   ├── config/          # Configuration management
-│   ├── store/           # SQLite persistence
-│   ├── plan/            # Plan model, parsing, writing
-│   ├── agent/           # AI agent integration
-│   ├── session/         # Session management (tmux)
-│   ├── execution/       # Autonomous execution
-│   ├── notify/          # Notification system
-│   └── ui/              # UI components
-└── docs/                # Documentation
+│   ├── app/             # Main Bubble Tea model, orchestrates all components
+│   ├── agent/           # Agent interface and Claude Code integration
+│   ├── config/          # TOML configuration management
+│   ├── notify/          # Terminal bell notification system
+│   ├── session/         # PTY backend for interactive agent sessions
+│   ├── store/           # SQLite persistence (WAL mode)
+│   ├── tmux/            # Tmux integration (alternative backend)
+│   ├── ui/              # UI components (editor, file list, PTY panel, settings, help)
+│   ├── vt/              # Local fork of VT emulator with scroll callbacks
+│   └── workspace/       # Markdown file discovery and status tracking
+└── docs/                # Documentation and changelogs
 ```
 
 ## Development
 
-### Building
-
 ```bash
-make build
-```
-
-### Testing
-
-```bash
-make test
-```
-
-### With Coverage
-
-```bash
-make test-coverage
-```
-
-### Linting
-
-```bash
-make lint
-```
-
-### Running
-
-```bash
-make run
-```
-
-## Workflows
-
-### 1. Interactive Planning
-
-1. Create a new plan with a description
-2. AI suggests multiple approaches
-3. Select your preferred approach
-4. AI breaks down into phases
-5. Review and refine phases
-6. AI details tasks for each phase
-7. Mark tasks as done manually or dispatch to agents
-
-### 2. Autonomous Execution
-
-1. Select a plan with defined tasks
-2. Press `X` to start execution
-3. Choose scope: task, phase, or entire plan
-4. Approve permissions
-5. Watch progress as tasks execute
-6. Hijack sessions if needed (`Enter`)
-7. Receive notifications on completion
-
-### 3. Session Management
-
-- **Foreground**: Watch streaming output, accept/reject
-- **Background**: Run async, receive bell notifications
-- **Hijack**: Jump into any running session to intervene
-
-## Plan Format
-
-Plans are stored as markdown files in `.planck/plans/`:
-
-```
-.planck/plans/
-└── auth-refactor/
-    ├── index.md      # Overview, approaches
-    ├── phase-1.md    # First phase with tasks
-    ├── phase-2.md    # Second phase
-    └── ...
-```
-
-### Example Plan Structure
-
-```markdown
-# Authentication Refactor
-
-Refactor authentication system to support OAuth.
-
-## Selected Approach
-Approach A: Incremental Migration
-
-## Approaches
-
-### Approach A: Incremental Migration
-Migrate one auth method at a time...
-
-### Approach B: Big Bang
-Replace everything at once...
+make build          # Build binary to build/planck
+make test           # Run all tests with race detector
+make test-short     # Run short tests (skip integration)
+make test-coverage  # Tests with coverage report (outputs coverage.html)
+make lint           # Run golangci-lint
+make fmt            # Format code (go fmt + goimports)
+make run            # Build and run
+make dev            # Hot reload with air
+make build-all      # Cross-platform binaries (darwin/linux, amd64/arm64)
 ```
 
 ## License
