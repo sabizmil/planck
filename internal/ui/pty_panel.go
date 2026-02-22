@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/anthropics/planck/internal/session"
 )
 
 // PTYPanel displays an embedded PTY session
@@ -14,7 +16,6 @@ type PTYPanel struct {
 	visible   bool
 	focused   bool
 	inputMode bool // true = keystrokes go to PTY
-	scrollback bool // true = scrolling through history
 
 	// Session info
 	taskID    string
@@ -25,12 +26,13 @@ type PTYPanel struct {
 	// Terminal state
 	content string
 
+	// Line-based scrollback
+	scrollback   *session.ScrollbackBuffer
+	scrollOffset int // 0 = live view, >0 = lines scrolled up from bottom
+
 	// Dimensions
 	width  int
 	height int
-
-	// Scrollback
-	scrollOffset int
 
 	// Escape key sequence
 	escapeKey string
@@ -57,8 +59,24 @@ func (p *PTYPanel) Update(msg tea.Msg) (*PTYPanel, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		me := tea.MouseEvent(msg)
+		if me.IsWheel() {
+			if msg.Button == tea.MouseButtonWheelUp {
+				p.scrollUp(3)
+			} else if msg.Button == tea.MouseButtonWheelDown {
+				p.scrollDown(3)
+			}
+			return p, nil
+		}
+
 	case tea.KeyMsg:
 		if p.inputMode {
+			// Any keypress in input mode snaps to live view
+			if p.scrollOffset > 0 {
+				p.scrollOffset = 0
+			}
+
 			// Tab is for tab-switching, not forwarded to PTY
 			if msg.Type == tea.KeyTab {
 				return p, nil
@@ -84,43 +102,53 @@ func (p *PTYPanel) Update(msg tea.Msg) (*PTYPanel, tea.Cmd) {
 		switch msg.String() {
 		case "i", "enter":
 			p.inputMode = true
-			p.scrollback = false
-		case "s":
-			p.scrollback = !p.scrollback
-			if !p.scrollback {
-				p.scrollOffset = 0
-			}
-		case "j", "down":
-			if p.scrollback {
-				p.scrollOffset++
-				lines := strings.Count(p.content, "\n") + 1
-				maxOffset := lines - (p.height - 5)
-				if p.scrollOffset > maxOffset {
-					p.scrollOffset = maxOffset
-				}
-				if p.scrollOffset < 0 {
-					p.scrollOffset = 0
-				}
-			}
-		case "k", "up":
-			if p.scrollback {
-				p.scrollOffset--
-				if p.scrollOffset < 0 {
-					p.scrollOffset = 0
-				}
-			}
-		case "G":
-			// Jump to bottom (live mode)
-			p.scrollback = false
 			p.scrollOffset = 0
+		case "k", "up":
+			p.scrollUp(1)
+		case "j", "down":
+			p.scrollDown(1)
 		case "g":
-			if p.scrollback {
-				p.scrollOffset = 0
-			}
+			p.scrollToTop()
+		case "G":
+			p.scrollOffset = 0
+		case "pgup":
+			p.scrollUp(p.height / 2)
+		case "pgdown":
+			p.scrollDown(p.height / 2)
 		}
 	}
 
 	return p, nil
+}
+
+// scrollUp scrolls up by n lines, clamped to scrollback length.
+func (p *PTYPanel) scrollUp(n int) {
+	p.scrollOffset += n
+	maxOffset := p.scrollbackLen()
+	if p.scrollOffset > maxOffset {
+		p.scrollOffset = maxOffset
+	}
+}
+
+// scrollDown scrolls down by n lines, clamped to 0 (live view).
+func (p *PTYPanel) scrollDown(n int) {
+	p.scrollOffset -= n
+	if p.scrollOffset < 0 {
+		p.scrollOffset = 0
+	}
+}
+
+// scrollToTop scrolls to the top of the scrollback buffer.
+func (p *PTYPanel) scrollToTop() {
+	p.scrollOffset = p.scrollbackLen()
+}
+
+// scrollbackLen returns the number of lines in the scrollback buffer, or 0.
+func (p *PTYPanel) scrollbackLen() int {
+	if p.scrollback == nil {
+		return 0
+	}
+	return p.scrollback.Len()
 }
 
 // PTYWriteMsg carries data to write to the PTY
@@ -225,65 +253,81 @@ func keyToBytes(msg tea.KeyMsg) []byte {
 	}
 }
 
-// View renders the PTY panel
+// View renders the PTY panel — full-height, no chrome
 func (p *PTYPanel) View() string {
 	if !p.visible {
 		return ""
 	}
 
-	var sb strings.Builder
-
-	// Header
-	var statusIcon string
-	switch p.status {
-	case "running":
-		statusIcon = p.theme.StatusProgress.Render("● Running")
-	case "completed":
-		statusIcon = p.theme.StatusDone.Render("✓ Completed")
-	case "failed":
-		statusIcon = p.theme.StatusFailed.Render("✗ Failed")
-	default:
-		statusIcon = p.theme.Dimmed.Render("○ Idle")
-	}
-
-	header := fmt.Sprintf("Claude  %s", statusIcon)
-	if p.inputMode {
-		header += lipgloss.NewStyle().Foreground(p.theme.Accent).Render("  [INTERACTIVE]")
-	} else if p.scrollback {
-		header += p.theme.Dimmed.Render("  [SCROLLBACK - press i to interact]")
-	}
-
-	sb.WriteString(p.theme.Title.Render(header))
-	sb.WriteString("\n")
-	sb.WriteString(p.theme.Dimmed.Render(safeRepeat("─", p.width-4)))
-	sb.WriteString("\n")
-
-	// Terminal content
-	termHeight := p.height - 5 // Account for header(1) + sep(1) + footer(newline+sep=2) + padding
-	if termHeight < 1 {
-		termHeight = 1
-	}
-
+	// Split live screen content into lines
+	var screenLines []string
 	if p.content != "" {
-		lines := strings.Split(p.content, "\n")
-		for i := 0; i < termHeight; i++ {
-			if i < len(lines) {
-				sb.WriteString(lines[i])
+		screenLines = strings.Split(p.content, "\n")
+	}
+	screenHeight := len(screenLines)
+
+	sbLen := p.scrollbackLen()
+	totalLines := sbLen + screenHeight
+
+	// The viewport is p.height lines tall.
+	// viewportBottom is the last virtual line index (exclusive) visible.
+	// When scrollOffset==0 the viewport shows the live screen.
+	viewportBottom := totalLines - p.scrollOffset
+	viewportTop := viewportBottom - p.height
+	if viewportTop < 0 {
+		viewportTop = 0
+	}
+
+	var sb strings.Builder
+	for row := viewportTop; row < viewportTop+p.height; row++ {
+		if row < sbLen {
+			// Scrollback region
+			if p.scrollback != nil {
+				sb.WriteString(p.scrollback.Line(row))
 			}
-			sb.WriteString("\n")
+		} else if row < totalLines {
+			// Live screen region
+			screenIdx := row - sbLen
+			if screenIdx < screenHeight {
+				sb.WriteString(screenLines[screenIdx])
+			}
 		}
-	} else {
-		// Empty terminal
-		for i := 0; i < termHeight; i++ {
+		// else: beyond content, leave blank
+
+		if row < viewportTop+p.height-1 {
 			sb.WriteString("\n")
 		}
 	}
 
-	// Footer separator
-	sb.WriteString("\n")
-	sb.WriteString(p.theme.Dimmed.Render(safeRepeat("─", p.width-4)))
+	rendered := p.theme.DetailPanel.Width(p.width).Height(p.height).Render(sb.String())
 
-	return p.theme.DetailPanel.Width(p.width).Height(p.height).Render(sb.String())
+	// Overlay scroll indicator when scrolled up
+	if p.scrollOffset > 0 {
+		indicator := fmt.Sprintf(" SCROLL [-%d lines] ", p.scrollOffset)
+		style := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#000000")).
+			Background(lipgloss.Color("#FFCC00"))
+		badge := style.Render(indicator)
+
+		// Place indicator at top-right of the rendered output
+		renderedLines := strings.Split(rendered, "\n")
+		if len(renderedLines) > 0 {
+			badgeWidth := lipgloss.Width(badge)
+			firstLine := renderedLines[0]
+			lineWidth := lipgloss.Width(firstLine)
+			if badgeWidth < lineWidth {
+				pos := lineWidth - badgeWidth - 1
+				if pos < 0 {
+					pos = 0
+				}
+				renderedLines[0] = firstLine[:pos] + badge
+				rendered = strings.Join(renderedLines, "\n")
+			}
+		}
+	}
+
+	return rendered
 }
 
 // Show shows the PTY panel
@@ -294,9 +338,13 @@ func (p *PTYPanel) Show(taskID, taskTitle, sessionID string) {
 	p.sessionID = sessionID
 	p.status = "running"
 	p.inputMode = false
-	p.scrollback = false
-	p.scrollOffset = 0
 	p.content = ""
+	p.scrollOffset = 0
+}
+
+// SetScrollback sets the scrollback buffer reference for this panel.
+func (p *PTYPanel) SetScrollback(sb *session.ScrollbackBuffer) {
+	p.scrollback = sb
 }
 
 // Hide hides the PTY panel
@@ -347,7 +395,6 @@ func (p *PTYPanel) SetFocused(focused bool) {
 // EnterInputMode enters input mode
 func (p *PTYPanel) EnterInputMode() {
 	p.inputMode = true
-	p.scrollback = false
 }
 
 // ExitInputMode exits input mode
@@ -355,15 +402,10 @@ func (p *PTYPanel) ExitInputMode() {
 	p.inputMode = false
 }
 
-// IsScrollback returns whether the panel is in scrollback mode
-func (p *PTYPanel) IsScrollback() bool {
-	return p.scrollback
-}
-
-// TerminalSize returns the size for the PTY terminal
+// TerminalSize returns the size for the PTY terminal (full panel, minus padding)
 func (p *PTYPanel) TerminalSize() (rows, cols int) {
-	rows = p.height - 5 // Account for header(1) + sep(1) + footer(newline+sep=2) + padding
-	cols = p.width - 4  // Account for padding
+	rows = p.height
+	cols = p.width - 4 // Account for DetailPanel horizontal padding (2+2)
 	if rows < 1 {
 		rows = 1
 	}

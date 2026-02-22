@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 
 	"github.com/anthropics/planck/internal/config"
 	"github.com/anthropics/planck/internal/session"
@@ -25,6 +27,19 @@ const (
 	FocusAgent
 )
 
+const maxAgentTabs = 8
+
+// AgentTab represents a single agent tab with its own PTY session
+type AgentTab struct {
+	id          string // unique tab ID
+	agentKey    string // config key (e.g., "claude-code")
+	baseLabel   string // display label from config (e.g., "Claude")
+	instanceNum int    // per-type instance number (1, 2, ...)
+	session     *session.Session
+	panel       *ui.PTYPanel
+	agentCfg    config.AgentConfig
+}
+
 // App is the main application model
 type App struct {
 	// Configuration
@@ -35,29 +50,30 @@ type App struct {
 	// State management
 	store          *store.Store
 	workspace      *workspace.Workspace
-	sessionBackend session.Backend
+	sessionBackend *session.PTYBackend
 
 	// UI components
-	theme       *ui.Theme
-	tabs        *ui.TabBar
-	fileList    *ui.FileList
-	editor      *ui.Editor
-	ptyPanel    *ui.PTYPanel
-	statusPanel *ui.StatusPanel
-	dialog      *ui.Dialog
-	help        *ui.Help
+	theme    *ui.Theme
+	tabs     *ui.TabBar
+	fileList *ui.FileList
+	editor   *ui.Editor
+	dialog   *ui.Dialog
+	help     *ui.Help
 
 	// Overlays
 	folderPicker        *ui.FolderPicker
 	folderPickerVisible bool
 
+	// Multi-agent tabs
+	agentTabs      []*AgentTab    // ordered list of agent tabs
+	activeTabIdx   int            // 0 = planning, 1+ = agent tabs
+	nextInstanceNum map[string]int // per-agent-type instance counter
+
 	// Current state
-	activeTab      ui.Tab
-	focus          Focus
-	width, height  int
-	message        string
-	quitting       bool
-	currentSession *session.Session
+	focus         Focus
+	width, height int
+	message       string
+	quitting      bool
 
 	// File watching
 	watchChan <-chan struct{}
@@ -67,7 +83,7 @@ type App struct {
 }
 
 // New creates a new application
-func New(cfg *config.Config, configDir, folder string, backend session.Backend) (*App, error) {
+func New(cfg *config.Config, configDir, folder string, backend *session.PTYBackend) (*App, error) {
 	// Open store
 	st, err := store.Open(cfg.StateDBPath())
 	if err != nil {
@@ -84,22 +100,21 @@ func New(cfg *config.Config, configDir, folder string, backend session.Backend) 
 	theme := ui.DefaultTheme()
 
 	app := &App{
-		config:         cfg,
-		configDir:      configDir,
-		folder:         folder,
-		store:          st,
-		workspace:      ws,
-		sessionBackend: backend,
-		theme:          theme,
-		tabs:           ui.NewTabBar(theme),
-		fileList:       ui.NewFileList(theme),
-		editor:         ui.NewEditor(theme),
-		ptyPanel:       ui.NewPTYPanel(theme),
-		statusPanel:    ui.NewStatusPanel(theme),
-		dialog:         ui.NewDialog(theme),
-		help:           ui.NewHelp(theme),
-		activeTab:      ui.TabPlanning,
-		focus:          FocusFileList,
+		config:          cfg,
+		configDir:       configDir,
+		folder:          folder,
+		store:           st,
+		workspace:       ws,
+		sessionBackend:  backend,
+		theme:           theme,
+		tabs:            ui.NewTabBar(theme),
+		fileList:        ui.NewFileList(theme),
+		editor:          ui.NewEditor(theme),
+		dialog:          ui.NewDialog(theme),
+		help:            ui.NewHelp(theme),
+		activeTabIdx:    0,
+		focus:           FocusFileList,
+		nextInstanceNum: make(map[string]int),
 	}
 
 	// Set folder path in tab bar
@@ -145,6 +160,51 @@ func (a *App) watchForChanges() tea.Cmd {
 
 type fileChangedMsg struct{}
 
+// isOnPlanningTab returns true if the planning tab is active
+func (a *App) isOnPlanningTab() bool {
+	return a.activeTabIdx == 0
+}
+
+// isOnAgentTab returns true if an agent tab is active
+func (a *App) isOnAgentTab() bool {
+	return a.activeTabIdx > 0
+}
+
+// activeAgentTab returns the currently active agent tab, or nil
+func (a *App) activeAgentTab() *AgentTab {
+	idx := a.activeTabIdx - 1
+	if idx < 0 || idx >= len(a.agentTabs) {
+		return nil
+	}
+	return a.agentTabs[idx]
+}
+
+// activePanel returns the PTY panel of the active agent tab, or nil
+func (a *App) activePanel() *ui.PTYPanel {
+	if tab := a.activeAgentTab(); tab != nil {
+		return tab.panel
+	}
+	return nil
+}
+
+// isInPTYInputMode returns true if the active agent panel is in input mode
+func (a *App) isInPTYInputMode() bool {
+	if panel := a.activePanel(); panel != nil {
+		return panel.IsInputMode()
+	}
+	return false
+}
+
+// findAgentTabBySessionID finds the agent tab that owns a given session ID
+func (a *App) findAgentTabBySessionID(sessionID string) *AgentTab {
+	for _, tab := range a.agentTabs {
+		if tab.session != nil && tab.session.ID == sessionID {
+			return tab
+		}
+	}
+	return nil
+}
+
 // Update handles messages
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -160,6 +220,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle quit
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		if msg.String() == "ctrl+c" {
+			a.killAllSessions()
 			a.quitting = true
 			return a, tea.Quit
 		}
@@ -181,14 +242,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.editor.ClearModified()
 		}
 		return a, nil
-	}
-
-	// Handle tick for status panel
-	if _, ok := msg.(ui.TickMsg); ok {
-		// Update elapsed time display
-		if a.statusPanel != nil {
-			cmds = append(cmds, a.statusPanel.StartTicker())
-		}
 	}
 
 	// Dialog takes priority
@@ -220,29 +273,31 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, cmd
 	}
 
-	// Handle PTY messages
+	// Handle PTY messages — route to the correct agent tab by session ID
 	if msg, ok := msg.(ui.PTYWriteMsg); ok {
-		if a.currentSession != nil {
-			if ptyBackend, ok := a.sessionBackend.(*session.PTYBackend); ok {
-				ptyBackend.Write(a.currentSession.BackendHandle, msg.Data)
-			}
+		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
+			a.sessionBackend.Write(tab.session.BackendHandle, msg.Data)
 		}
 	}
 
 	if msg, ok := msg.(ui.PTYRenderMsg); ok {
-		a.ptyPanel.SetContent(msg.Content)
-		cmds = append(cmds, a.pollPTY())
+		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
+			tab.panel.SetContent(msg.Content)
+			cmds = append(cmds, a.pollAgentTab(tab))
+		}
 	}
 
 	if msg, ok := msg.(ui.PTYExitedMsg); ok {
-		a.ptyPanel.SetStatus("completed")
-		a.statusPanel.SetAgentStatus(ui.AgentIdle)
-		a.message = fmt.Sprintf("Session completed (exit code: %d)", msg.ExitCode)
+		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
+			tab.panel.SetStatus("completed")
+			a.syncTabBar()
+			a.message = fmt.Sprintf("%s completed (exit code: %d)", tab.baseLabel, msg.ExitCode)
+		}
 	}
 
 	// Handle mouse events on planning tab
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
-		if a.activeTab == ui.TabPlanning {
+		if a.isOnPlanningTab() {
 			cmd := a.handlePlanningMouse(mouseMsg)
 			if cmd != nil {
 				cmds = append(cmds, cmd)
@@ -260,7 +315,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Update focused component based on active tab
-	if a.activeTab == ui.TabPlanning {
+	if a.isOnPlanningTab() {
 		switch a.focus {
 		case FocusFileList:
 			fileList, cmd := a.fileList.Update(msg)
@@ -289,11 +344,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.editor.SetFocused(false)
 			}
 		}
-	} else {
-		// Agent tab
-		if a.ptyPanel.IsVisible() {
-			panel, cmd := a.ptyPanel.Update(msg)
-			a.ptyPanel = panel
+	} else if panel := a.activePanel(); panel != nil {
+		// Agent tab: update the active panel
+		if panel.IsVisible() {
+			updated, cmd := panel.Update(msg)
+			// PTYPanel.Update returns *PTYPanel, reassign
+			if tab := a.activeAgentTab(); tab != nil {
+				tab.panel = updated
+			}
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -312,7 +370,7 @@ func (a *App) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 		if a.editor.Mode() == ui.EditorModeEdit {
 			return nil
 		}
-		if a.ptyPanel.IsInputMode() {
+		if a.isInPTYInputMode() {
 			return nil
 		}
 		a.help.Toggle()
@@ -320,68 +378,410 @@ func (a *App) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 
 	case "q":
 		if a.editor.Mode() == ui.EditorModeEdit {
-			// In edit mode, q is just text
 			return nil
 		}
-		if a.ptyPanel.IsInputMode() {
-			// In PTY input mode, q is just text
+		if a.isInPTYInputMode() {
 			return nil
 		}
+		a.killAllSessions()
 		a.quitting = true
 		return tea.Quit
 
 	case "tab":
-		// Handle tab switching (works even in PTY input mode)
 		if a.editor.Mode() == ui.EditorModeEdit {
 			return nil
 		}
-		if a.activeTab == ui.TabPlanning {
-			a.activeTab = ui.TabAgent
-			a.tabs.SetActiveTab(ui.TabAgent)
-			a.focus = FocusAgent
-			a.updateFocus()
-			return a.startAgentSession()
-		} else {
-			a.ptyPanel.ExitInputMode()
-			a.activeTab = ui.TabPlanning
-			a.tabs.SetActiveTab(ui.TabPlanning)
-			a.focus = FocusFileList
-			a.fileList.SetFocused(true)
-			a.updateFocus()
+		return a.cycleTab()
+
+	case "ctrl+x":
+		// Close agent tab — works even in input mode
+		if a.isOnAgentTab() {
+			if panel := a.activePanel(); panel != nil {
+				panel.ExitInputMode()
+			}
+			return a.closeCurrentAgentTab()
 		}
 		return nil
 
-	case "1":
+	case "a":
 		if a.editor.Mode() == ui.EditorModeEdit {
 			return nil
 		}
-		if a.activeTab == ui.TabAgent {
-			a.ptyPanel.ExitInputMode()
+		if a.isInPTYInputMode() {
+			return nil
 		}
-		a.activeTab = ui.TabPlanning
-		a.tabs.SetActiveTab(ui.TabPlanning)
-		a.focus = FocusFileList
-		a.fileList.SetFocused(true)
-		a.updateFocus()
-		return nil
+		return a.createAgentTab()
 
-	case "2":
+	case "x":
 		if a.editor.Mode() == ui.EditorModeEdit {
 			return nil
 		}
-		a.activeTab = ui.TabAgent
-		a.tabs.SetActiveTab(ui.TabAgent)
-		a.focus = FocusAgent
-		a.updateFocus()
-		return a.startAgentSession()
+		if a.isInPTYInputMode() {
+			return nil
+		}
+		return a.closeCurrentAgentTab()
+	}
+
+	// Number keys 1-9 for tab switching
+	if key >= "1" && key <= "9" {
+		if a.editor.Mode() == ui.EditorModeEdit {
+			return nil
+		}
+		if a.isInPTYInputMode() {
+			return nil
+		}
+		idx := int(key[0] - '0') - 1 // "1" → 0, "2" → 1, etc.
+		return a.switchToTab(idx)
 	}
 
 	// Tab-specific keys
-	if a.activeTab == ui.TabPlanning {
+	if a.isOnPlanningTab() {
 		return a.handlePlanningTabKey(key, msg)
 	}
 
 	return nil
+}
+
+// cycleTab cycles to the next tab
+func (a *App) cycleTab() tea.Cmd {
+	totalTabs := 1 + len(a.agentTabs) // planning + agents
+	if totalTabs <= 1 {
+		return nil // Only planning tab, nowhere to cycle
+	}
+
+	// Exit input mode on current agent tab
+	if panel := a.activePanel(); panel != nil {
+		panel.ExitInputMode()
+	}
+
+	next := (a.activeTabIdx + 1) % totalTabs
+	return a.switchToTab(next)
+}
+
+// switchToTab switches to a tab by index (0 = planning, 1+ = agent tabs)
+func (a *App) switchToTab(idx int) tea.Cmd {
+	totalTabs := 1 + len(a.agentTabs)
+	if idx < 0 || idx >= totalTabs {
+		return nil
+	}
+
+	// Exit input mode on current agent tab
+	if panel := a.activePanel(); panel != nil {
+		panel.ExitInputMode()
+	}
+
+	a.activeTabIdx = idx
+	a.tabs.SetActiveIdx(idx)
+
+	if a.isOnPlanningTab() {
+		a.focus = FocusFileList
+		a.fileList.SetFocused(true)
+		a.editor.SetFocused(false)
+	} else {
+		a.focus = FocusAgent
+		a.fileList.SetFocused(false)
+		a.editor.SetFocused(false)
+		// Auto-enter input mode if session is running
+		if tab := a.activeAgentTab(); tab != nil && tab.session != nil {
+			status, _ := a.sessionBackend.Status(tab.session.BackendHandle)
+			if status == session.StatusRunning {
+				tab.panel.EnterInputMode()
+			}
+		}
+	}
+
+	return nil
+}
+
+// createAgentTab handles the "a" key to create a new agent tab
+func (a *App) createAgentTab() tea.Cmd {
+	if len(a.agentTabs) >= maxAgentTabs {
+		a.message = "Maximum agent tabs reached (8)"
+		return nil
+	}
+
+	// Get sorted agent keys for consistent ordering
+	agentKeys := a.sortedAgentKeys()
+
+	if len(agentKeys) == 0 {
+		a.message = "No agents configured"
+		return nil
+	}
+
+	if len(agentKeys) == 1 {
+		// Single agent type → create immediately
+		return a.launchAgentTab(agentKeys[0])
+	}
+
+	// Multiple agent types → show selection dialog
+	var options []ui.DialogOption
+	for _, key := range agentKeys {
+		agent := a.config.Agents[key]
+		label := a.config.GetAgentLabel(key)
+		options = append(options, ui.DialogOption{
+			Label:       label,
+			Description: agent.Command,
+		})
+	}
+
+	a.dialog.ShowSelect("New Agent", options, func(result ui.DialogResult) {
+		if result.Confirmed && result.Selected >= 0 && result.Selected < len(agentKeys) {
+			a.launchAgentTab(agentKeys[result.Selected])
+		}
+	})
+
+	return nil
+}
+
+// launchAgentTab creates and launches a new agent tab for the given config key
+func (a *App) launchAgentTab(agentKey string) tea.Cmd {
+	agentCfg, ok := a.config.Agents[agentKey]
+	if !ok {
+		a.message = fmt.Sprintf("Agent %q not found in config", agentKey)
+		return nil
+	}
+
+	// Check if command is available
+	if !session.IsCommandAvailable(agentCfg.Command) {
+		a.message = fmt.Sprintf("%s not found in PATH", agentCfg.Command)
+		return nil
+	}
+
+	// Assign instance number
+	a.nextInstanceNum[agentKey]++
+	instanceNum := a.nextInstanceNum[agentKey]
+
+	baseLabel := a.config.GetAgentLabel(agentKey)
+
+	// Create PTY panel
+	panel := ui.NewPTYPanel(a.theme)
+	contentHeight := a.height - 4
+	panel.SetSize(a.width, contentHeight)
+
+	tab := &AgentTab{
+		id:          uuid.New().String(),
+		agentKey:    agentKey,
+		baseLabel:   baseLabel,
+		instanceNum: instanceNum,
+		panel:       panel,
+		agentCfg:    agentCfg,
+	}
+
+	// Add to tabs
+	a.agentTabs = append(a.agentTabs, tab)
+	a.syncTabBar()
+
+	// Switch to the new tab
+	newIdx := len(a.agentTabs) // 1-indexed (planning is 0)
+	a.activeTabIdx = newIdx
+	a.tabs.SetActiveIdx(newIdx)
+	a.focus = FocusAgent
+	a.fileList.SetFocused(false)
+	a.editor.SetFocused(false)
+
+	// Build args for launch — filter interactive-safe args from PlanningArgs
+	var launchArgs []string
+	for _, arg := range agentCfg.PlanningArgs {
+		switch arg {
+		case "--dangerously-skip-permissions":
+			launchArgs = append(launchArgs, arg)
+		}
+	}
+
+	// Launch the session
+	ctx := context.Background()
+	sess, err := a.sessionBackend.LaunchCommand(ctx, a.folder, agentCfg.Command, launchArgs, "")
+	if err != nil {
+		a.message = fmt.Sprintf("Error launching %s: %v", baseLabel, err)
+		// Remove the tab we just added
+		a.agentTabs = a.agentTabs[:len(a.agentTabs)-1]
+		a.syncTabBar()
+		a.activeTabIdx = 0
+		a.tabs.SetActiveIdx(0)
+		a.focus = FocusFileList
+		a.fileList.SetFocused(true)
+		return nil
+	}
+
+	tab.session = sess
+
+	// Resize the PTY to match panel dimensions
+	rows, cols := tab.panel.TerminalSize()
+	a.sessionBackend.Resize(sess.BackendHandle, uint16(rows), uint16(cols))
+
+	// Wire scrollback buffer from backend to panel
+	if sb := a.sessionBackend.GetScrollback(sess.BackendHandle); sb != nil {
+		tab.panel.SetScrollback(sb)
+	}
+
+	// Show PTY panel and enter input mode
+	tab.panel.Show(agentKey, baseLabel, sess.ID)
+	tab.panel.EnterInputMode()
+
+	a.message = fmt.Sprintf("%s session started", a.computeTabLabel(tab))
+
+	// Start polling
+	return a.pollAgentTab(tab)
+}
+
+// closeCurrentAgentTab handles the "x" key to close the current agent tab
+func (a *App) closeCurrentAgentTab() tea.Cmd {
+	if a.isOnPlanningTab() {
+		return nil // Can't close planning tab
+	}
+
+	tab := a.activeAgentTab()
+	if tab == nil {
+		return nil
+	}
+
+	// Check if session is still running
+	isRunning := false
+	if tab.session != nil {
+		status, _ := a.sessionBackend.Status(tab.session.BackendHandle)
+		isRunning = status == session.StatusRunning
+	}
+
+	if isRunning {
+		// Show confirmation dialog
+		a.dialog.ShowConfirm(
+			"Close Agent?",
+			fmt.Sprintf("Kill the running session and close %s?", a.computeTabLabel(tab)),
+			func(result ui.DialogResult) {
+				if result.Confirmed {
+					a.removeAgentTab(tab)
+				}
+			},
+		)
+		return nil
+	}
+
+	// Session completed or no session — close immediately
+	a.removeAgentTab(tab)
+	return nil
+}
+
+// removeAgentTab kills the session and removes the tab
+func (a *App) removeAgentTab(tab *AgentTab) {
+	// Kill session if running
+	if tab.session != nil {
+		_ = a.sessionBackend.Kill(tab.session.BackendHandle)
+	}
+
+	// Find and remove from slice
+	for i, t := range a.agentTabs {
+		if t.id == tab.id {
+			a.agentTabs = append(a.agentTabs[:i], a.agentTabs[i+1:]...)
+			break
+		}
+	}
+
+	a.syncTabBar()
+
+	// Move focus to previous tab or planning
+	if a.activeTabIdx > len(a.agentTabs) {
+		a.activeTabIdx = len(a.agentTabs) // Last agent tab, or 0 if none
+	}
+	if a.activeTabIdx == 0 {
+		a.focus = FocusFileList
+		a.fileList.SetFocused(true)
+	} else {
+		a.focus = FocusAgent
+	}
+	a.tabs.SetActiveIdx(a.activeTabIdx)
+}
+
+// computeTabLabel returns the display label for an agent tab,
+// including instance number if there are multiple tabs of the same type
+func (a *App) computeTabLabel(tab *AgentTab) string {
+	count := 0
+	for _, t := range a.agentTabs {
+		if t.agentKey == tab.agentKey {
+			count++
+		}
+	}
+	if count > 1 {
+		return fmt.Sprintf("%s #%d", tab.baseLabel, tab.instanceNum)
+	}
+	return tab.baseLabel
+}
+
+// syncTabBar rebuilds the tab bar to match current agent tabs
+func (a *App) syncTabBar() {
+	tabs := []ui.TabInfo{{Label: "Planning"}}
+	for _, tab := range a.agentTabs {
+		status := ""
+		if tab.panel != nil {
+			// Check if panel shows completed status
+			if tab.session != nil {
+				s, _ := a.sessionBackend.Status(tab.session.BackendHandle)
+				if s == session.StatusCompleted {
+					status = "completed"
+				}
+			}
+		}
+		tabs = append(tabs, ui.TabInfo{
+			Label:  a.computeTabLabel(tab),
+			Status: status,
+		})
+	}
+	a.tabs.SetTabs(tabs)
+}
+
+// sortedAgentKeys returns agent config keys in deterministic order
+func (a *App) sortedAgentKeys() []string {
+	keys := make([]string, 0, len(a.config.Agents))
+	for k := range a.config.Agents {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	// Move default agent to front
+	for i, k := range keys {
+		if a.config.Agents[k].Default {
+			keys[0], keys[i] = keys[i], keys[0]
+			break
+		}
+	}
+	return keys
+}
+
+// pollAgentTab returns a tea.Cmd that polls a specific agent tab's PTY
+func (a *App) pollAgentTab(tab *AgentTab) tea.Cmd {
+	if tab.session == nil {
+		return nil
+	}
+
+	handle := tab.session.BackendHandle
+	sessionID := tab.session.ID
+	backend := a.sessionBackend
+
+	return func() tea.Msg {
+		time.Sleep(50 * time.Millisecond)
+
+		// Check if session has exited
+		status, err := backend.Status(handle)
+		if err != nil || status != session.StatusRunning {
+			exitCode, _ := backend.GetExitCode(handle)
+			return ui.PTYExitedMsg{SessionID: sessionID, ExitCode: exitCode}
+		}
+
+		// Get rendered terminal output
+		content, err := backend.Render(handle)
+		if err != nil {
+			return ui.PTYRenderMsg{SessionID: sessionID, Content: ""}
+		}
+
+		return ui.PTYRenderMsg{SessionID: sessionID, Content: content}
+	}
+}
+
+// killAllSessions kills all running agent sessions
+func (a *App) killAllSessions() {
+	for _, tab := range a.agentTabs {
+		if tab.session != nil {
+			_ = a.sessionBackend.Kill(tab.session.BackendHandle)
+		}
+	}
 }
 
 func (a *App) handlePlanningTabKey(key string, msg tea.KeyMsg) tea.Cmd {
@@ -489,89 +889,9 @@ func (a *App) handlePlanningMouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
-func (a *App) startAgentSession() tea.Cmd {
-	// Check if already running
-	if a.currentSession != nil {
-		// Session already exists, just show the panel
-		a.ptyPanel.Show("claude", "Claude Code", a.currentSession.ID)
-		a.ptyPanel.EnterInputMode() // Auto-enter input mode on re-entry
-		return a.pollPTY()
-	}
-
-	// Check if Claude is available
-	if !a.sessionBackend.IsAvailable() {
-		a.message = "Claude CLI not available"
-		return nil
-	}
-
-	// Launch interactive Claude session in the workspace folder
-	ctx := context.Background()
-	sess, err := a.sessionBackend.Launch(ctx, a.folder, "")
-	if err != nil {
-		a.message = fmt.Sprintf("Error launching Claude: %v", err)
-		return nil
-	}
-
-	a.currentSession = sess
-
-	// Resize the PTY to match current panel dimensions
-	if ptyBackend, ok := a.sessionBackend.(*session.PTYBackend); ok {
-		rows, cols := a.ptyPanel.TerminalSize()
-		ptyBackend.Resize(sess.BackendHandle, uint16(rows), uint16(cols))
-	}
-
-	// Show PTY panel
-	a.ptyPanel.Show("claude", "Claude Code", sess.ID)
-	a.ptyPanel.EnterInputMode() // Start in input mode for interactive use
-
-	// Update status panel
-	a.statusPanel.SetAgentStatus(ui.AgentRunning)
-
-	a.message = "Claude session started"
-
-	// Return the first poll command to kick off the polling loop
-	return a.pollPTY()
-}
-
-// pollPTY returns a tea.Cmd that polls the PTY for rendered output
-func (a *App) pollPTY() tea.Cmd {
-	sess := a.currentSession
-	if sess == nil {
-		return nil
-	}
-
-	ptyBackend, ok := a.sessionBackend.(*session.PTYBackend)
-	if !ok {
-		return nil
-	}
-
-	handle := sess.BackendHandle
-	sessionID := sess.ID
-
-	return func() tea.Msg {
-		time.Sleep(50 * time.Millisecond)
-
-		// Check if session has exited
-		status, err := ptyBackend.Status(handle)
-		if err != nil || status != session.StatusRunning {
-			exitCode, _ := ptyBackend.GetExitCode(handle)
-			return ui.PTYExitedMsg{SessionID: sessionID, ExitCode: exitCode}
-		}
-
-		// Get rendered terminal output
-		content, err := ptyBackend.Render(handle)
-		if err != nil {
-			return ui.PTYRenderMsg{SessionID: sessionID, Content: ""}
-		}
-
-		return ui.PTYRenderMsg{SessionID: sessionID, Content: content}
-	}
-}
-
 func (a *App) updateFocus() {
 	a.fileList.SetFocused(a.focus == FocusFileList)
 	a.editor.SetFocused(a.focus == FocusEditor)
-	a.ptyPanel.SetFocused(a.focus == FocusAgent)
 }
 
 func (a *App) loadFile(name string) {
@@ -592,7 +912,6 @@ func (a *App) refreshFiles() {
 
 	files := a.workspace.Files()
 	a.fileList.SetFiles(files)
-	a.statusPanel.SetFiles(files)
 	a.prevCursor = a.fileList.Cursor()
 }
 
@@ -613,19 +932,15 @@ func (a *App) View() string {
 	contentHeight := a.height - 4 // Tab bar + status bar
 
 	var mainContent string
-	if a.activeTab == ui.TabPlanning {
-		// Planning tab: file list + editor + status panel
+	if a.isOnPlanningTab() {
+		// Planning tab: file list + editor
 		fileListView := a.fileList.View()
 		editorView := a.editor.View()
-		statusView := a.statusPanel.View()
 
-		mainContent = lipgloss.JoinHorizontal(lipgloss.Top, fileListView, editorView, statusView)
-	} else {
-		// Agent tab: PTY panel + status panel
-		ptyView := a.ptyPanel.View()
-		statusView := a.statusPanel.View()
-
-		mainContent = lipgloss.JoinHorizontal(lipgloss.Top, ptyView, statusView)
+		mainContent = lipgloss.JoinHorizontal(lipgloss.Top, fileListView, editorView)
+	} else if panel := a.activePanel(); panel != nil {
+		// Agent tab: PTY panel
+		mainContent = panel.View()
 	}
 
 	// Ensure content fits height
@@ -664,22 +979,21 @@ func (a *App) renderStatusBar() string {
 		leftContent = a.theme.Normal.Render(a.message)
 		a.message = "" // Clear after showing
 	} else if a.folderPickerVisible {
-		leftContent = a.theme.KeyHint.Render("[↑↓] navigate  [Enter] select  [b] browse  [Esc] cancel")
+		leftContent = a.theme.KeyHint.Render("[^|v] navigate  [Enter] select  [b] browse  [Esc] cancel")
 	} else {
 		// Show context hints
-		if a.activeTab == ui.TabPlanning {
+		if a.isOnPlanningTab() {
 			if a.editor.Mode() == ui.EditorModeEdit {
 				leftContent = a.theme.KeyHint.Render("[Esc] save & exit  [Ctrl+S] save")
 			} else {
-				leftContent = a.theme.KeyHint.Render("[↑↓] navigate  [Enter] open  [e] edit  [←→] collapse/expand  [n] new  [d] delete  [o] folder  [Tab] agent")
+				leftContent = a.theme.KeyHint.Render("[^|v] navigate  [e] edit  [n] new  [d] delete  [o] folder  [a] agent  [Tab] cycle")
 			}
 		} else {
-			if a.ptyPanel.IsInputMode() {
-				leftContent = a.theme.KeyHint.Render("[Tab] planning  [Ctrl+\\] scrollback mode")
-			} else if a.ptyPanel.IsScrollback() {
-				leftContent = a.theme.KeyHint.Render("[j/k] scroll  [g/G] top/bottom  [i] interact  [Tab] planning")
+			panel := a.activePanel()
+			if panel != nil && panel.IsInputMode() {
+				leftContent = a.theme.KeyHint.Render("[Ctrl+\\] normal  [Ctrl+X] close  [Tab] cycle  [scroll] scrollback")
 			} else {
-				leftContent = a.theme.KeyHint.Render("[i] interact  [s] scrollback  [Tab] planning")
+				leftContent = a.theme.KeyHint.Render("[i] interact  [a] new agent  [x] close  [Tab] cycle")
 			}
 		}
 	}
@@ -703,8 +1017,7 @@ func (a *App) renderStatusBar() string {
 func (a *App) updateSizes() {
 	// Layout calculations
 	fileListWidth := 24
-	statusPanelWidth := 22
-	editorWidth := a.width - fileListWidth - statusPanelWidth
+	editorWidth := a.width - fileListWidth
 	if editorWidth < 40 {
 		editorWidth = 40
 	}
@@ -716,19 +1029,18 @@ func (a *App) updateSizes() {
 	a.fileList.SetSize(fileListWidth, contentHeight)
 	a.editor.SetSize(editorWidth, contentHeight)
 	a.editor.SetPosition(fileListWidth+1, 2) // +1 for border, 2 for tab bar
-	a.statusPanel.SetSize(statusPanelWidth, contentHeight)
-	a.ptyPanel.SetSize(a.width-statusPanelWidth, contentHeight)
 	a.dialog.SetSize(a.width, a.height)
 	a.help.SetSize(a.width, a.height)
 	if a.folderPicker != nil {
 		a.folderPicker.SetSize(a.width, a.height)
 	}
 
-	// Resize PTY to match panel dimensions
-	if a.currentSession != nil {
-		if ptyBackend, ok := a.sessionBackend.(*session.PTYBackend); ok {
-			rows, cols := a.ptyPanel.TerminalSize()
-			ptyBackend.Resize(a.currentSession.BackendHandle, uint16(rows), uint16(cols))
+	// Resize all agent PTY panels
+	for _, tab := range a.agentTabs {
+		tab.panel.SetSize(a.width, contentHeight)
+		if tab.session != nil {
+			rows, cols := tab.panel.TerminalSize()
+			a.sessionBackend.Resize(tab.session.BackendHandle, uint16(rows), uint16(cols))
 		}
 	}
 }
@@ -757,14 +1069,10 @@ func (a *App) switchFolder(newFolder string) tea.Cmd {
 		a.editor.ClearModified()
 	}
 
-	// Kill active PTY session if any
-	if a.currentSession != nil {
-		if ptyBackend, ok := a.sessionBackend.(*session.PTYBackend); ok {
-			_ = ptyBackend.Kill(a.currentSession.BackendHandle)
-		}
-		a.currentSession = nil
-		a.ptyPanel.Hide()
-	}
+	// Kill all agent sessions and remove all agent tabs
+	a.killAllSessions()
+	a.agentTabs = nil
+	a.nextInstanceNum = make(map[string]int)
 
 	// Stop old workspace watcher
 	a.workspace.StopWatch()
@@ -797,8 +1105,9 @@ func (a *App) switchFolder(newFolder string) tea.Cmd {
 		a.store = st
 	}
 
-	// Update UI
+	// Update UI — back to just Planning tab
 	a.tabs.SetFolderPath(newFolder)
+	a.syncTabBar()
 	a.refreshFiles()
 	a.editor.SetContent("", "")
 
@@ -810,8 +1119,8 @@ func (a *App) switchFolder(newFolder string) tea.Cmd {
 	}
 
 	// Switch to planning tab
-	a.activeTab = ui.TabPlanning
-	a.tabs.SetActiveTab(ui.TabPlanning)
+	a.activeTabIdx = 0
+	a.tabs.SetActiveIdx(0)
 	a.focus = FocusFileList
 	a.fileList.SetFocused(true)
 	a.updateFocus()

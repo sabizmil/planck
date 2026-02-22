@@ -102,8 +102,10 @@ func (h *Help) renderHelpContent() string {
 	sb.WriteString(h.theme.Title.Render("Global"))
 	sb.WriteString("\n")
 	sb.WriteString(h.renderKeySection([][]string{
-		{"Tab", "Switch between planning/agent"},
-		{"1 / 2", "Go to planning / agent tab"},
+		{"Tab", "Cycle through tabs"},
+		{"1-9", "Jump to tab by number"},
+		{"a", "Create new agent tab"},
+		{"x / Ctrl+X", "Close current agent tab"},
 		{"?", "Toggle this help"},
 		{"q / Ctrl+c", "Quit"},
 	}))
@@ -116,20 +118,12 @@ func (h *Help) renderHelpContent() string {
 		{"j / ↓", "Move down"},
 		{"k / ↑", "Move up"},
 		{"Enter", "Open file in editor"},
-		{"→ / l", "Focus editor"},
+		{"→ / l", "Expand folder"},
+		{"← / h", "Collapse folder"},
+		{"e", "Enter edit mode"},
 		{"n", "New file"},
 		{"d", "Delete file"},
 		{"o", "Switch folder"},
-	}))
-	sb.WriteString("\n")
-
-	// Editor
-	sb.WriteString(h.theme.Title.Render("Editor (Planning Tab)"))
-	sb.WriteString("\n")
-	sb.WriteString(h.renderKeySection([][]string{
-		{"e", "Enter edit mode"},
-		{"← / h", "Back to file list"},
-		{"↑/↓", "Scroll content"},
 	}))
 	sb.WriteString("\n")
 
@@ -143,15 +137,23 @@ func (h *Help) renderHelpContent() string {
 	sb.WriteString("\n")
 
 	// Agent Tab
-	sb.WriteString(h.theme.Title.Render("Agent Tab"))
+	sb.WriteString(h.theme.Title.Render("Agent Tab (Input Mode)"))
 	sb.WriteString("\n")
 	sb.WriteString(h.renderKeySection([][]string{
-		{"Tab", "Auto-enters input mode"},
-		{"Ctrl+\\", "Exit to scrollback mode"},
-		{"i", "Re-enter input mode"},
-		{"s", "Toggle scrollback"},
-		{"j/k", "Scroll (in scrollback)"},
-		{"g / G", "Top / bottom (scrollback)"},
+		{"Ctrl+\\", "Exit to normal mode"},
+		{"Ctrl+X", "Close tab"},
+		{"Scroll", "Browse output history"},
+		{"Tab", "Cycle tabs"},
+	}))
+	sb.WriteString("\n")
+
+	// Agent normal mode
+	sb.WriteString(h.theme.Title.Render("Agent Tab (Normal Mode)"))
+	sb.WriteString("\n")
+	sb.WriteString(h.renderKeySection([][]string{
+		{"i / Enter", "Enter input mode"},
+		{"x", "Close tab"},
+		{"a", "New agent tab"},
 	}))
 	sb.WriteString("\n")
 

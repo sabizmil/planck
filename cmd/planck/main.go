@@ -112,25 +112,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create session backend, passing through interactive-safe agent flags
-	_, agentCfg := cfg.GetDefaultAgent()
-	var sessionArgs []string
-	for _, arg := range agentCfg.PlanningArgs {
-		switch arg {
-		case "--dangerously-skip-permissions":
-			sessionArgs = append(sessionArgs, arg)
-		}
-	}
-	backend, err := session.NewBackend(session.BackendConfig{
-		Backend:     cfg.Session.Backend,
-		Prefix:      cfg.Preferences.TmuxPrefix,
-		SessionsDir: cfg.SessionsDir(),
-		ExtraArgs:   sessionArgs,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating session backend: %v\n", err)
-		os.Exit(1)
-	}
+	// Create PTY backend (per-agent args are handled at launch time)
+	backend := session.NewPTYBackend(
+		cfg.Preferences.TmuxPrefix,
+		cfg.SessionsDir(),
+		nil, // no global extra args; per-agent args passed at launch
+	)
 
 	// Initialize and run the app
 	application, err := app.New(cfg, configDir, folder, backend)
@@ -178,7 +165,7 @@ func runFolderPicker(recentFolders []string) (string, error) {
 }
 
 func printHelp() {
-	fmt.Println(`planck - Folder-based markdown editor with embedded Claude agent
+	fmt.Println(`planck - Folder-based markdown editor with multi-agent support
 
 Usage:
   planck [options] [folder]
@@ -188,24 +175,31 @@ Options:
   -h, --help         Show this help message
   -v, --version      Show version information
 
+Keybindings (Global):
+  Tab         Cycle through tabs
+  1-9         Jump to tab by number
+  a           Create new agent tab
+  x / Ctrl+X  Close current agent tab
+  ?           Toggle help
+  q           Quit
+
 Keybindings (Planning Tab):
   ↑/↓, j/k    Navigate files
-  Enter       Select file
+  Enter       Open file in editor
   e           Edit file
   n           New file
   d           Delete file
-  s           Send to Claude agent
-  Tab/1/2     Switch tabs
+  o           Switch folder
 
-Keybindings (Agent Tab):
-  i           Enter input mode
-  Ctrl+\      Exit input mode
-  Tab/1/2     Switch tabs
+Keybindings (Agent Tab - Input Mode):
+  Ctrl+\      Exit to normal mode
+  Ctrl+X      Close tab
+  Scroll      Browse output history
 
-Keybindings (Editor):
-  ↑/↓/←/→     Move cursor
-  Ctrl+S      Save file
-  Esc         Exit edit mode
+Keybindings (Agent Tab - Normal Mode):
+  i / Enter   Enter input mode
+  x           Close tab
+  a           New agent tab
 
 For more information, visit: https://github.com/anthropics/planck`)
 }

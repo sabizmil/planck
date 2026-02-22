@@ -45,8 +45,7 @@ Thumbs.db
 
 # Documentation - not tracked (living docs managed locally)
 docs/PRD/
-test-plans/
-planck-spec.md
+docs/specs/
 
 # Claude Code working files
 .claude/plans/

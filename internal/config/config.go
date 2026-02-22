@@ -25,6 +25,7 @@ type Config struct {
 // AgentConfig configures an AI agent
 type AgentConfig struct {
 	Command            string   `toml:"command"`
+	Label              string   `toml:"label"`
 	PlanningArgs       []string `toml:"planning_args"`
 	ImplementationArgs []string `toml:"implementation_args"`
 	Default            bool     `toml:"default"`
@@ -67,6 +68,7 @@ func DefaultConfig() *Config {
 		Agents: map[string]AgentConfig{
 			"claude-code": {
 				Command:            "claude",
+				Label:              "Claude",
 				PlanningArgs:       []string{"-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"},
 				ImplementationArgs: []string{},
 				Default:            true,
@@ -213,6 +215,14 @@ func (c *Config) GetDefaultAgent() (string, AgentConfig) {
 		return name, agent
 	}
 	return "", AgentConfig{}
+}
+
+// GetAgentLabel returns the display label for an agent, falling back to the config key
+func (c *Config) GetAgentLabel(key string) string {
+	if agent, ok := c.Agents[key]; ok && agent.Label != "" {
+		return agent.Label
+	}
+	return key
 }
 
 // PlansDir returns the plans directory path

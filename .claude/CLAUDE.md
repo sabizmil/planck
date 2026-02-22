@@ -1,5 +1,5 @@
 # Planck - Claude Code Project Rules
-
+    
 ## Project Overview
 
 Planck is a terminal UI (TUI) application for AI-assisted planning and task management. It orchestrates multiple Claude Code agent sessions via tmux, providing a structured workflow for breaking down complex tasks.

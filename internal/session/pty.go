@@ -22,6 +22,7 @@ type PTYSession struct {
 	master     *os.File      // PTY master fd (read/write)
 	cmd        *exec.Cmd     // Child process
 	terminal   *vt.Emulator  // Virtual terminal state
+	scrollback *ScrollbackBuffer
 	mu         sync.Mutex
 	done       chan struct{}
 	exitCode   int
@@ -57,18 +58,29 @@ func (p *PTYBackend) Name() string {
 	return "pty"
 }
 
-// IsAvailable returns whether PTY backend is available
+// IsAvailable returns whether PTY backend is available (checks default "claude" command)
 func (p *PTYBackend) IsAvailable() bool {
-	// PTY is available on Unix-like systems
-	// Check if claude is available
-	_, err := exec.LookPath("claude")
+	return IsCommandAvailable("claude")
+}
+
+// IsCommandAvailable checks if a command exists in PATH
+func IsCommandAvailable(command string) bool {
+	_, err := exec.LookPath(command)
 	return err == nil
 }
 
-// Launch starts a new PTY session
+// Launch starts a new PTY session using the default "claude" command.
 // If prompt is empty, launches an interactive Claude session without a system prompt.
 // taskID is used as the working directory for the session.
 func (p *PTYBackend) Launch(ctx context.Context, taskID string, prompt string) (*Session, error) {
+	args := append([]string{}, p.extraArgs...)
+	return p.LaunchCommand(ctx, taskID, "claude", args, prompt)
+}
+
+// LaunchCommand starts a new PTY session with a specified command and arguments.
+// workDir is the working directory for the session.
+// If prompt is non-empty, it's written to a temp file and passed via --system-prompt-file.
+func (p *PTYBackend) LaunchCommand(ctx context.Context, workDir, command string, args []string, prompt string) (*Session, error) {
 	id := uuid.New().String()
 
 	// Ensure sessions directory exists
@@ -76,25 +88,24 @@ func (p *PTYBackend) Launch(ctx context.Context, taskID string, prompt string) (
 		return nil, fmt.Errorf("create sessions dir: %w", err)
 	}
 
-	var cmd *exec.Cmd
 	var promptFile string
 
-	args := append([]string{}, p.extraArgs...)
+	cmdArgs := append([]string{}, args...)
 	if prompt != "" {
 		// Write prompt to temp file
 		promptFile = filepath.Join(p.sessionsDir, fmt.Sprintf("%s-prompt.md", id))
 		if err := os.WriteFile(promptFile, []byte(prompt), 0600); err != nil {
 			return nil, fmt.Errorf("write prompt file: %w", err)
 		}
-		args = append(args, "--system-prompt-file", promptFile)
+		cmdArgs = append(cmdArgs, "--system-prompt-file", promptFile)
 	}
-	cmd = exec.CommandContext(ctx, "claude", args...)
+	cmd := exec.CommandContext(ctx, command, cmdArgs...)
 
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
-	// Set working directory to taskID (which is the folder path for interactive sessions)
-	if info, err := os.Stat(taskID); err == nil && info.IsDir() {
-		cmd.Dir = taskID
+	// Set working directory
+	if info, err := os.Stat(workDir); err == nil && info.IsDir() {
+		cmd.Dir = workDir
 	}
 
 	// Start in PTY
@@ -114,18 +125,32 @@ func (p *PTYBackend) Launch(ctx context.Context, taskID string, prompt string) (
 	// Create virtual terminal emulator (default 80x24)
 	terminal := vt.NewEmulator(80, 24)
 
+	scrollback := NewScrollbackBuffer(p.scrollbackLines)
+	terminal.SetCallbacks(vt.Callbacks{
+		ScrollOff: func(lines []string, altScreen bool) {
+			if !altScreen {
+				scrollback.Push(lines)
+			}
+		},
+	})
+
 	ptySess := &PTYSession{
 		id:         id,
-		taskID:     taskID,
+		taskID:     workDir,
 		master:     master,
 		cmd:        cmd,
 		terminal:   terminal,
+		scrollback: scrollback,
 		done:       make(chan struct{}),
 		promptFile: promptFile,
 	}
 
 	// Background reader: PTY master → vt.Terminal
 	go ptySess.readLoop()
+
+	// Background writer: vt.Terminal responses → PTY master
+	// This forwards mouse events, device attribute responses, etc.
+	go ptySess.responseLoop()
 
 	// Background waiter: detect child exit
 	go ptySess.waitLoop()
@@ -136,7 +161,7 @@ func (p *PTYBackend) Launch(ctx context.Context, taskID string, prompt string) (
 
 	return &Session{
 		ID:            id,
-		TaskID:        taskID,
+		TaskID:        workDir,
 		BackendHandle: id,
 		Status:        StatusRunning,
 		Backend:       "pty",
@@ -155,7 +180,26 @@ func (s *PTYSession) readLoop() {
 			s.mu.Unlock()
 		}
 		if err != nil {
+			// Close the emulator pipe to unblock responseLoop
+			s.terminal.Close()
 			return
+		}
+	}
+}
+
+// responseLoop reads responses from the virtual terminal (device attribute
+// responses, etc.) and forwards them to the child PTY.
+func (s *PTYSession) responseLoop() {
+	buf := make([]byte, 256)
+	for {
+		n, err := s.terminal.Read(buf)
+		if n > 0 {
+			if _, werr := s.master.Write(buf[:n]); werr != nil {
+				return // master closed
+			}
+		}
+		if err != nil {
+			return // emulator pipe closed
 		}
 	}
 }
@@ -260,8 +304,9 @@ func (p *PTYBackend) Kill(handle string) error {
 		}
 	}
 
-	// Close master fd
+	// Close master fd and emulator
 	sess.master.Close()
+	sess.terminal.Close() // unblock responseLoop if still running
 
 	// Clean up prompt file
 	if sess.promptFile != "" {
@@ -357,6 +402,15 @@ func (p *PTYBackend) GetTerminal(handle string) (*vt.Emulator, error) {
 		return nil, fmt.Errorf("session not found: %s", handle)
 	}
 	return sess.terminal, nil
+}
+
+// GetScrollback returns the scrollback buffer for a session
+func (p *PTYBackend) GetScrollback(handle string) *ScrollbackBuffer {
+	sess := p.getSession(handle)
+	if sess == nil {
+		return nil
+	}
+	return sess.scrollback
 }
 
 // GetDoneChannel returns the done channel for a session

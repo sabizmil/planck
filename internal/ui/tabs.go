@@ -1,45 +1,36 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Tab represents a tab in the tab bar
-type Tab int
-
-const (
-	TabPlanning Tab = iota
-	TabAgent
-)
-
-// String returns the display name of the tab
-func (t Tab) String() string {
-	switch t {
-	case TabPlanning:
-		return "Planning"
-	case TabAgent:
-		return "Agent"
-	default:
-		return "Unknown"
-	}
+// TabInfo describes a single tab in the tab bar
+type TabInfo struct {
+	Label  string // Display label (e.g., "Planning", "Claude #1")
+	Status string // "running", "completed", "" (only for agent tabs)
 }
 
 // TabBar displays the tab bar at the top of the screen
 type TabBar struct {
 	theme      *Theme
-	activeTab  Tab
+	tabs       []TabInfo // tabs[0] is always Planning
+	activeIdx  int
 	folderPath string
 	width      int
 }
 
-// NewTabBar creates a new tab bar
+// NewTabBar creates a new tab bar with a Planning tab
 func NewTabBar(theme *Theme) *TabBar {
 	return &TabBar{
-		theme:     theme,
-		activeTab: TabPlanning,
+		theme: theme,
+		tabs: []TabInfo{
+			{Label: "Planning"},
+		},
+		activeIdx: 0,
 	}
 }
 
@@ -48,30 +39,13 @@ func (t *TabBar) Init() tea.Cmd {
 	return nil
 }
 
-// Update handles messages
+// Update handles messages (tab bar is now driven externally by App)
 func (t *TabBar) Update(msg tea.Msg) (*TabBar, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "tab":
-			// Cycle through tabs
-			if t.activeTab == TabPlanning {
-				t.activeTab = TabAgent
-			} else {
-				t.activeTab = TabPlanning
-			}
-		case "1":
-			t.activeTab = TabPlanning
-		case "2":
-			t.activeTab = TabAgent
-		}
-	}
 	return t, nil
 }
 
 // View renders the tab bar
 func (t *TabBar) View() string {
-	// Tab styles
 	activeStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(t.theme.Accent).
@@ -82,28 +56,42 @@ func (t *TabBar) View() string {
 		Foreground(t.theme.Secondary).
 		Padding(0, 2)
 
+	completedStyle := lipgloss.NewStyle().
+		Foreground(t.theme.Success).
+		Padding(0, 2)
+
 	// Build tabs
 	var tabs strings.Builder
 
-	tabs.WriteString("[")
-	if t.activeTab == TabPlanning {
-		tabs.WriteString(activeStyle.Render("Planning"))
-	} else {
-		tabs.WriteString(inactiveStyle.Render("Planning"))
+	for i, tab := range t.tabs {
+		if i > 0 {
+			tabs.WriteString("  ")
+		}
+
+		label := tab.Label
+		// Add status indicator for completed agent tabs
+		if tab.Status == "completed" && i > 0 {
+			label += " " + IndicatorDone
+		}
+
+		// Add number prefix
+		numLabel := fmt.Sprintf("%d:%s", i+1, label)
+
+		tabs.WriteString("[")
+		if i == t.activeIdx {
+			tabs.WriteString(activeStyle.Render(numLabel))
+		} else if tab.Status == "completed" && i > 0 {
+			tabs.WriteString(completedStyle.Render(numLabel))
+		} else {
+			tabs.WriteString(inactiveStyle.Render(numLabel))
+		}
+		tabs.WriteString("]")
 	}
-	tabs.WriteString("]  [")
-	if t.activeTab == TabAgent {
-		tabs.WriteString(activeStyle.Render("Agent"))
-	} else {
-		tabs.WriteString(inactiveStyle.Render("Agent"))
-	}
-	tabs.WriteString("]")
 
 	// Add folder path on the right
 	tabsStr := tabs.String()
 	tabsWidth := lipgloss.Width(tabsStr)
 
-	// Folder path
 	folderStyle := t.theme.Dimmed
 	folder := t.folderPath
 	if folder == "" {
@@ -130,14 +118,41 @@ func (t *TabBar) View() string {
 	return result + "\n" + border
 }
 
-// SetActiveTab sets the active tab
-func (t *TabBar) SetActiveTab(tab Tab) {
-	t.activeTab = tab
+// SetActiveIdx sets the active tab by index
+func (t *TabBar) SetActiveIdx(idx int) {
+	if idx >= 0 && idx < len(t.tabs) {
+		t.activeIdx = idx
+	}
 }
 
-// ActiveTab returns the currently active tab
-func (t *TabBar) ActiveTab() Tab {
-	return t.activeTab
+// ActiveIdx returns the currently active tab index
+func (t *TabBar) ActiveIdx() int {
+	return t.activeIdx
+}
+
+// TabCount returns the number of tabs
+func (t *TabBar) TabCount() int {
+	return len(t.tabs)
+}
+
+// SetTabs replaces the tab list (Planning tab is always preserved as tabs[0])
+func (t *TabBar) SetTabs(tabs []TabInfo) {
+	if len(tabs) == 0 {
+		t.tabs = []TabInfo{{Label: "Planning"}}
+	} else {
+		t.tabs = tabs
+	}
+	// Clamp active index
+	if t.activeIdx >= len(t.tabs) {
+		t.activeIdx = len(t.tabs) - 1
+	}
+}
+
+// UpdateTabStatus updates the status of a specific tab
+func (t *TabBar) UpdateTabStatus(idx int, status string) {
+	if idx >= 0 && idx < len(t.tabs) {
+		t.tabs[idx].Status = status
+	}
 }
 
 // SetFolderPath sets the folder path to display
