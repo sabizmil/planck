@@ -327,9 +327,6 @@ func (f *FileList) View() string {
 		b.WriteString("\n")
 	}
 
-	// Footer separator
-	b.WriteString(f.theme.Dimmed.Render(safeRepeat("─", f.width-2)))
-
 	return f.theme.Sidebar.Width(f.width).Height(f.height).Render(b.String())
 }
 

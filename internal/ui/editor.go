@@ -426,8 +426,6 @@ func (e *Editor) View() string {
 		b.WriteString(e.renderViewMode(visibleLines))
 	}
 
-	// Footer
-	b.WriteString(e.theme.Dimmed.Render(safeRepeat("─", e.width-4)))
 	if e.mode == EditorModeEdit {
 		b.WriteString("\n")
 		b.WriteString(e.theme.Dimmed.Render(fmt.Sprintf("Ln %d, Col %d", e.cursorRow+1, e.cursorCol+1)))

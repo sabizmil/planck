@@ -3,10 +3,17 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// Braille spinner frames for running tabs
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// SpinnerTickMsg advances the spinner animation
+type SpinnerTickMsg struct{}
 
 // TabInfo describes a single tab in the tab bar
 type TabInfo struct {
@@ -16,11 +23,12 @@ type TabInfo struct {
 
 // TabBar displays the tab bar at the top of the screen
 type TabBar struct {
-	theme      *Theme
-	tabs       []TabInfo // tabs[0] is always Planning
-	activeIdx  int
-	folderPath string
-	width      int
+	theme        *Theme
+	tabs         []TabInfo // tabs[0] is always Planning
+	activeIdx    int
+	folderPath   string
+	width        int
+	spinnerFrame int
 }
 
 // NewTabBar creates a new tab bar with a Planning tab
@@ -41,7 +49,30 @@ func (t *TabBar) Init() tea.Cmd {
 
 // Update handles messages (tab bar is now driven externally by App)
 func (t *TabBar) Update(msg tea.Msg) (*TabBar, tea.Cmd) {
+	if _, ok := msg.(SpinnerTickMsg); ok {
+		t.spinnerFrame = (t.spinnerFrame + 1) % len(spinnerFrames)
+		if t.HasRunningTabs() {
+			return t, t.Tick()
+		}
+	}
 	return t, nil
+}
+
+// Tick returns a command that fires a SpinnerTickMsg after 80ms
+func (t *TabBar) Tick() tea.Cmd {
+	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
+		return SpinnerTickMsg{}
+	})
+}
+
+// HasRunningTabs returns true if any tab has status "running"
+func (t *TabBar) HasRunningTabs() bool {
+	for _, tab := range t.tabs {
+		if tab.Status == "running" {
+			return true
+		}
+	}
+	return false
 }
 
 // View renders the tab bar
@@ -60,6 +91,10 @@ func (t *TabBar) View() string {
 		Foreground(t.theme.Success).
 		Padding(0, 2)
 
+	runningStyle := lipgloss.NewStyle().
+		Foreground(t.theme.Accent).
+		Padding(0, 2)
+
 	// Build tabs
 	var tabs strings.Builder
 
@@ -69,9 +104,11 @@ func (t *TabBar) View() string {
 		}
 
 		label := tab.Label
-		// Add status indicator for completed agent tabs
+		// Add status indicator for agent tabs
 		if tab.Status == "completed" && i > 0 {
 			label += " " + IndicatorDone
+		} else if tab.Status == "running" && i > 0 {
+			label = spinnerFrames[t.spinnerFrame] + " " + label
 		}
 
 		// Add number prefix
@@ -82,6 +119,8 @@ func (t *TabBar) View() string {
 			tabs.WriteString(activeStyle.Render(numLabel))
 		} else if tab.Status == "completed" && i > 0 {
 			tabs.WriteString(completedStyle.Render(numLabel))
+		} else if tab.Status == "running" && i > 0 {
+			tabs.WriteString(runningStyle.Render(numLabel))
 		} else {
 			tabs.WriteString(inactiveStyle.Render(numLabel))
 		}

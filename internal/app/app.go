@@ -72,12 +72,15 @@ type App struct {
 	folderPickerVisible bool
 
 	// Multi-agent tabs
-	agentTabs      []*AgentTab    // ordered list of agent tabs
-	activeTabIdx   int            // 0 = planning, 1+ = agent tabs
+	agentTabs       []*AgentTab    // ordered list of agent tabs
+	activeTabIdx    int            // 0 = planning, 1+ = agent tabs
 	nextInstanceNum map[string]int // per-agent-type instance counter
 
 	// Deferred agent launch (set by dialog callback, consumed by Update)
 	pendingAgentKey string
+
+	// Spinner tick needs to start (set by syncTabBar, consumed by Update)
+	pendingSpinnerStart bool
 
 	// Current state
 	focus         Focus
@@ -117,6 +120,25 @@ func New(cfg *config.Config, configDir, folder string, backend *session.PTYBacke
 	editor := ui.NewEditor(theme)
 	editor.SetMarkdownStyle(styleJSON)
 
+	// Build settings configs from config
+	generalCfg := ui.GeneralSettingsChangedMsg{
+		Editor:         cfg.Preferences.Editor,
+		Bell:           cfg.Notifications.Bell,
+		Backend:        cfg.Session.Backend,
+		DefaultScope:   cfg.Execution.DefaultScope,
+		AutoAdvance:    cfg.Execution.AutoAdvance,
+		PermissionMode: cfg.Execution.PermissionMode,
+	}
+	agentsCfg := make(map[string]ui.AgentSettingsConfig, len(cfg.Agents))
+	for k, a := range cfg.Agents {
+		agentsCfg[k] = ui.AgentSettingsConfig{
+			Command:      a.Command,
+			Label:        a.Label,
+			PlanningArgs: a.PlanningArgs,
+			Default:      a.Default,
+		}
+	}
+
 	app := &App{
 		config:          cfg,
 		configDir:       configDir,
@@ -130,7 +152,7 @@ func New(cfg *config.Config, configDir, folder string, backend *session.PTYBacke
 		editor:          editor,
 		dialog:          ui.NewDialog(theme),
 		help:            ui.NewHelp(theme),
-		settings:        ui.NewSettings(theme, registry, styleCfg),
+		settings:        ui.NewSettings(theme, registry, styleCfg, generalCfg, agentsCfg),
 		styleRegistry:   registry,
 		activeTabIdx:    0,
 		focus:           FocusFileList,
@@ -273,7 +295,37 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.config.MarkdownStyle.Overrides[string(elem)] = string(theme)
 		}
 		_ = a.config.Save()
-		a.message = "Markdown style updated"
+		return a, nil
+	}
+
+	// Handle general settings changes from settings panel
+	if msg, ok := msg.(ui.GeneralSettingsChangedMsg); ok {
+		a.config.Preferences.Editor = msg.Editor
+		a.config.Notifications.Bell = msg.Bell
+		a.config.Session.Backend = msg.Backend
+		a.config.Execution.DefaultScope = msg.DefaultScope
+		a.config.Execution.AutoAdvance = msg.AutoAdvance
+		a.config.Execution.PermissionMode = msg.PermissionMode
+		_ = a.config.Save()
+		return a, nil
+	}
+
+	// Handle agent settings changes from settings panel
+	if msg, ok := msg.(ui.AgentsSettingsChangedMsg); ok {
+		for key, agentUI := range msg.Agents {
+			agent := a.config.Agents[key]
+			agent.Command = agentUI.Command
+			agent.Label = agentUI.Label
+			agent.PlanningArgs = agentUI.PlanningArgs
+			agent.Default = agentUI.Default
+			a.config.Agents[key] = agent
+		}
+		_ = a.config.Save()
+		// Update base labels on existing tabs so syncTabBar picks them up
+		for _, tab := range a.agentTabs {
+			tab.baseLabel = a.config.GetAgentLabel(tab.agentKey)
+		}
+		a.syncTabBar()
 		return a, nil
 	}
 
@@ -307,6 +359,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Handle spinner tick — forward to tab bar
+	if _, ok := msg.(ui.SpinnerTickMsg); ok {
+		_, cmd := a.tabs.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return a, tea.Batch(cmds...)
+	}
+
 	// Dialog takes priority
 	if a.dialog.IsVisible() {
 		dialog, cmd := a.dialog.Update(msg)
@@ -332,6 +393,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := a.launchAgentTab(key); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	}
+
+	// Start spinner tick if syncTabBar detected new running tabs
+	if a.pendingSpinnerStart {
+		a.pendingSpinnerStart = false
+		cmds = append(cmds, a.tabs.Tick())
 	}
 
 	// Help takes priority
@@ -527,7 +594,7 @@ func (a *App) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 		if a.isInPTYInputMode() {
 			return nil
 		}
-		idx := int(key[0] - '0') - 1 // "1" → 0, "2" → 1, etc.
+		idx := int(key[0]-'0') - 1 // "1" → 0, "2" → 1, etc.
 		return a.switchToTab(idx)
 	}
 
@@ -828,9 +895,14 @@ func sanitizeTabTitle(raw string) string {
 		return ""
 	}
 
-	// Strip non-printable, control, and zero-width / format characters
+	// Strip non-printable, control, zero-width / format, and braille pattern
+	// characters (U+2800–U+28FF). Braille dots leak from Claude Code's OSC
+	// window title; we strip them so the spinner is solely Planck's.
 	var sb strings.Builder
 	for _, r := range raw {
+		if r >= 0x2800 && r <= 0x28FF {
+			continue
+		}
 		if unicode.IsPrint(r) && !unicode.Is(unicode.Cf, r) {
 			sb.WriteRune(r)
 		}
@@ -847,16 +919,18 @@ func sanitizeTabTitle(raw string) string {
 
 // syncTabBar rebuilds the tab bar to match current agent tabs
 func (a *App) syncTabBar() {
+	hadRunning := a.tabs.HasRunningTabs()
+
 	tabs := []ui.TabInfo{{Label: "Planning"}}
 	for _, tab := range a.agentTabs {
 		status := ""
-		if tab.panel != nil {
-			// Check if panel shows completed status
-			if tab.session != nil {
-				s, _ := a.sessionBackend.Status(tab.session.BackendHandle)
-				if s == session.StatusCompleted {
-					status = "completed"
-				}
+		if tab.panel != nil && tab.session != nil {
+			s, _ := a.sessionBackend.Status(tab.session.BackendHandle)
+			switch s {
+			case session.StatusCompleted:
+				status = "completed"
+			case session.StatusRunning:
+				status = "running"
 			}
 		}
 		tabs = append(tabs, ui.TabInfo{
@@ -865,6 +939,11 @@ func (a *App) syncTabBar() {
 		})
 	}
 	a.tabs.SetTabs(tabs)
+
+	// Start spinner tick if we just gained running tabs
+	if !hadRunning && a.tabs.HasRunningTabs() {
+		a.pendingSpinnerStart = true
+	}
 }
 
 // sortedAgentKeys returns agent config keys in deterministic order
