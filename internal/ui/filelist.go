@@ -304,7 +304,7 @@ func (f *FileList) View() string {
 				if isSelected {
 					line = f.theme.SidebarSelected.Render(fmt.Sprintf("%s%s%s %s", prefix, indent, indicator, name))
 				} else if file.Status == workspace.StatusCompleted {
-					line = f.theme.Dimmed.Render(fmt.Sprintf("%s%s%s %s", prefix, indent, indicator, name))
+					line = f.theme.Dimmed.PaddingLeft(1).Render(fmt.Sprintf("%s%s%s %s", prefix, indent, indicator, name))
 				} else {
 					line = f.theme.SidebarItem.Render(fmt.Sprintf("%s%s%s %s", prefix, indent, indicator, name))
 				}

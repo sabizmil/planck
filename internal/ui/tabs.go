@@ -90,35 +90,6 @@ func (t *TabBar) HasRunningTabs() bool {
 
 // View renders the tab bar
 func (t *TabBar) View() string {
-	activeStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.theme.Accent).
-		Background(lipgloss.Color("#1a1a1a")).
-		Padding(0, 2)
-
-	inactiveStyle := lipgloss.NewStyle().
-		Foreground(t.theme.Secondary).
-		Padding(0, 2)
-
-	completedStyle := lipgloss.NewStyle().
-		Foreground(t.theme.Success).
-		Padding(0, 2)
-
-	runningStyle := lipgloss.NewStyle().
-		Foreground(t.theme.Accent).
-		Padding(0, 2)
-
-	needsInputStyle := lipgloss.NewStyle().
-		Foreground(t.theme.Error).
-		Padding(0, 2)
-
-	// Active tab variant for needs_input — keep the active background but use red text
-	activeNeedsInputStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.theme.Error).
-		Background(lipgloss.Color("#1a1a1a")).
-		Padding(0, 2)
-
 	// Build tabs
 	var tabs strings.Builder
 
@@ -140,23 +111,26 @@ func (t *TabBar) View() string {
 		// Add number prefix
 		numLabel := fmt.Sprintf("%d:%s", i+1, label)
 
-		tabs.WriteString("[")
+		// Determine foreground color from tab state
+		var fg lipgloss.Color
 		if tab.Status == "needs_input" && i > 0 {
-			// Needs input always uses red styling, even when active
-			if i == t.activeIdx {
-				tabs.WriteString(activeNeedsInputStyle.Render(numLabel))
-			} else {
-				tabs.WriteString(needsInputStyle.Render(numLabel))
-			}
-		} else if i == t.activeIdx {
-			tabs.WriteString(activeStyle.Render(numLabel))
+			fg = t.theme.Error
 		} else if (tab.Status == "completed" || tab.Status == "idle") && i > 0 {
-			tabs.WriteString(completedStyle.Render(numLabel))
+			fg = t.theme.Success
 		} else if tab.Status == "running" && i > 0 {
-			tabs.WriteString(runningStyle.Render(numLabel))
+			fg = t.theme.Accent
 		} else {
-			tabs.WriteString(inactiveStyle.Render(numLabel))
+			fg = t.theme.Secondary
 		}
+
+		// Active tab: inherit state color, add bold + dark background
+		style := lipgloss.NewStyle().Foreground(fg).Padding(0, 2)
+		if i == t.activeIdx {
+			style = style.Bold(true).Background(lipgloss.Color("#1a1a1a"))
+		}
+
+		tabs.WriteString("[")
+		tabs.WriteString(style.Render(numLabel))
 		tabs.WriteString("]")
 	}
 

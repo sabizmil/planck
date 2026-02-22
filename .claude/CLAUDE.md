@@ -57,12 +57,26 @@ Any discoveries, decisions, or context gathered during implementation.
 
 ### Lifecycle Flow
 
-1. **Create** a plan file in `.claude/plans/` with status `created`
-2. **Work** on it, updating status to `in-progress` and checking off tasks
-3. **Complete** it when all tasks are done:
+1. **Create** a plan file in `.claude/plans/` with status `created` (use `/plan`)
+2. **Iterate** on it with the user — refine approach, adjust tasks
+3. **Execute** tasks, updating status to `in-progress` and checking off tasks as each is completed (use `/execute-plan` to run the full flow automatically)
+4. **Test** by running `make test` after all tasks are complete
+5. **Complete** once all tasks are done AND tests pass:
    - Set status to `completed`
    - Write a changelog entry to `docs/changelog/`
    - Move the plan file to `.claude/plans/archive/`
+
+### Automatic Plan Completion Rule
+
+**When working on tasks from a plan file, always follow this rule:**
+
+After completing the last unchecked task in a plan:
+1. Run `make build` to verify compilation
+2. Run `make test` to run the full test suite
+3. If tests pass, automatically complete the plan (generate changelog, archive the plan file)
+4. If tests fail, fix the failures and re-run (up to 3 attempts), then ask the user if still failing
+
+This applies whether you're working through tasks one-by-one in conversation or running `/execute-plan`. The plan is not done until tests pass and the plan is archived.
 
 ## Changelog Workflow
 

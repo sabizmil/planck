@@ -194,23 +194,11 @@ func (e *Editor) updateEditMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 		}
 
 	case tea.KeyUp:
-		if e.cursorRow > 0 {
-			e.cursorRow--
-			// Adjust column if line is shorter
-			if e.cursorCol > len(e.lines[e.cursorRow]) {
-				e.cursorCol = len(e.lines[e.cursorRow])
-			}
-		}
+		e.moveCursorUpVisual()
 		e.ensureCursorVisible()
 
 	case tea.KeyDown:
-		if e.cursorRow < len(e.lines)-1 {
-			e.cursorRow++
-			// Adjust column if line is shorter
-			if e.cursorCol > len(e.lines[e.cursorRow]) {
-				e.cursorCol = len(e.lines[e.cursorRow])
-			}
-		}
+		e.moveCursorDownVisual()
 		e.ensureCursorVisible()
 
 	case tea.KeyHome, tea.KeyCtrlA:
@@ -355,14 +343,59 @@ func (e *Editor) deleteForward() {
 	}
 }
 
+// moveCursorUpVisual moves the cursor up by one visual (wrapped) line.
+func (e *Editor) moveCursorUpVisual() {
+	maxLineWidth := e.editMaxLineWidth()
+	vlines := e.buildVisualLines(maxLineWidth)
+	curVRow := cursorVisualRow(vlines, e.cursorRow, e.cursorCol)
+
+	if curVRow <= 0 {
+		return // already at top
+	}
+
+	prev := vlines[curVRow-1]
+	e.cursorRow = prev.logicalRow
+	// Try to keep same visual column position
+	localCol := e.cursorCol - vlines[curVRow].colOffset
+	newCol := prev.colOffset + localCol
+	if newCol > prev.colOffset+len(prev.text) {
+		newCol = prev.colOffset + len(prev.text)
+	}
+	e.cursorCol = newCol
+}
+
+// moveCursorDownVisual moves the cursor down by one visual (wrapped) line.
+func (e *Editor) moveCursorDownVisual() {
+	maxLineWidth := e.editMaxLineWidth()
+	vlines := e.buildVisualLines(maxLineWidth)
+	curVRow := cursorVisualRow(vlines, e.cursorRow, e.cursorCol)
+
+	if curVRow >= len(vlines)-1 {
+		return // already at bottom
+	}
+
+	next := vlines[curVRow+1]
+	e.cursorRow = next.logicalRow
+	// Try to keep same visual column position
+	localCol := e.cursorCol - vlines[curVRow].colOffset
+	newCol := next.colOffset + localCol
+	if newCol > next.colOffset+len(next.text) {
+		newCol = next.colOffset + len(next.text)
+	}
+	e.cursorCol = newCol
+}
+
 func (e *Editor) ensureCursorVisible() {
 	visibleLines := e.visibleLines()
+	maxLineWidth := e.editMaxLineWidth()
+	vlines := e.buildVisualLines(maxLineWidth)
+	curVRow := cursorVisualRow(vlines, e.cursorRow, e.cursorCol)
 
-	if e.cursorRow < e.viewOffset {
-		e.viewOffset = e.cursorRow
+	if curVRow < e.viewOffset {
+		e.viewOffset = curVRow
 	}
-	if e.cursorRow >= e.viewOffset+visibleLines {
-		e.viewOffset = e.cursorRow - visibleLines + 1
+	if curVRow >= e.viewOffset+visibleLines {
+		e.viewOffset = curVRow - visibleLines + 1
 	}
 }
 
@@ -475,6 +508,108 @@ func (e *Editor) renderViewMode(visibleLines int) string {
 	return b.String()
 }
 
+// wrapLine splits a logical line into visual lines at word boundaries.
+// If a word is longer than maxWidth, it falls back to character-level wrapping.
+func wrapLine(line string, maxWidth int) []string {
+	if maxWidth <= 0 {
+		maxWidth = 10
+	}
+	if len(line) <= maxWidth {
+		return []string{line}
+	}
+
+	var result []string
+	remaining := line
+	for len(remaining) > maxWidth {
+		// Find the last space within maxWidth
+		splitAt := -1
+		for i := maxWidth; i >= 0; i-- {
+			if i < len(remaining) && remaining[i] == ' ' {
+				splitAt = i
+				break
+			}
+		}
+
+		if splitAt <= 0 {
+			// No space found — hard wrap at maxWidth
+			result = append(result, remaining[:maxWidth])
+			remaining = remaining[maxWidth:]
+		} else {
+			result = append(result, remaining[:splitAt])
+			remaining = remaining[splitAt+1:] // skip the space
+		}
+	}
+	result = append(result, remaining)
+	return result
+}
+
+// visualLine represents a single display row in the wrapped editor view.
+type visualLine struct {
+	logicalRow int    // index into e.lines
+	wrapIndex  int    // which wrapped segment (0 = first)
+	text       string // the text content of this visual line
+	colOffset  int    // character offset in the logical line where this segment starts
+}
+
+// buildVisualLines builds the full list of visual (wrapped) lines for the editor.
+func (e *Editor) buildVisualLines(maxLineWidth int) []visualLine {
+	var vlines []visualLine
+	for i, line := range e.lines {
+		wrapped := wrapLine(line, maxLineWidth)
+		offset := 0
+		for j, seg := range wrapped {
+			vlines = append(vlines, visualLine{
+				logicalRow: i,
+				wrapIndex:  j,
+				text:       seg,
+				colOffset:  offset,
+			})
+			offset += len(seg)
+			if j < len(wrapped)-1 {
+				offset++ // account for the space consumed by word wrap split
+			}
+		}
+	}
+	if len(vlines) == 0 {
+		vlines = []visualLine{{logicalRow: 0, wrapIndex: 0, text: "", colOffset: 0}}
+	}
+	return vlines
+}
+
+// cursorVisualRow returns the visual row index where the cursor currently sits.
+func cursorVisualRow(vlines []visualLine, logicalRow, logicalCol int) int {
+	for i, vl := range vlines {
+		if vl.logicalRow != logicalRow {
+			continue
+		}
+		// Check if cursor falls within this visual line segment
+		segEnd := vl.colOffset + len(vl.text)
+		if logicalCol >= vl.colOffset && logicalCol <= segEnd {
+			return i
+		}
+	}
+	// Fallback: return last visual line of this logical row
+	last := 0
+	for i, vl := range vlines {
+		if vl.logicalRow == logicalRow {
+			last = i
+		}
+	}
+	return last
+}
+
+func (e *Editor) editMaxLineWidth() int {
+	lineNumWidth := len(fmt.Sprintf("%d", len(e.lines)))
+	if lineNumWidth < 2 {
+		lineNumWidth = 2
+	}
+	maxLineWidth := e.width - lineNumWidth - 8
+	if maxLineWidth < 10 {
+		maxLineWidth = 10
+	}
+	return maxLineWidth
+}
+
 func (e *Editor) renderEditMode(visibleLines int) string {
 	var b strings.Builder
 
@@ -482,48 +617,69 @@ func (e *Editor) renderEditMode(visibleLines int) string {
 		e.lines = []string{""}
 	}
 
-	start := e.viewOffset
-	end := e.viewOffset + visibleLines
-
-	if start >= len(e.lines) {
-		start = len(e.lines) - 1
-	}
-	if start < 0 {
-		start = 0
-	}
-	if end > len(e.lines) {
-		end = len(e.lines)
-	}
-
-	// Line number width
 	lineNumWidth := len(fmt.Sprintf("%d", len(e.lines)))
 	if lineNumWidth < 2 {
 		lineNumWidth = 2
 	}
 
+	maxLineWidth := e.editMaxLineWidth()
+	vlines := e.buildVisualLines(maxLineWidth)
+
+	// Find cursor visual position
+	cursorVRow := cursorVisualRow(vlines, e.cursorRow, e.cursorCol)
+
+	start := e.viewOffset
+	end := e.viewOffset + visibleLines
+
+	if start >= len(vlines) {
+		start = len(vlines) - 1
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end > len(vlines) {
+		end = len(vlines)
+	}
+
+	cursorStyle := lipgloss.NewStyle().Reverse(true)
+
 	for i := start; i < end; i++ {
-		line := e.lines[i]
+		vl := vlines[i]
 
-		// Line number
-		lineNum := fmt.Sprintf("%*d", lineNumWidth, i+1)
-		b.WriteString(e.theme.Dimmed.Render(lineNum + " │ "))
-
-		// Line content with cursor
-		maxLineWidth := e.width - lineNumWidth - 8
-		if maxLineWidth < 10 {
-			maxLineWidth = 10
+		// Line number gutter: show number only on first visual line of a logical line
+		if vl.wrapIndex == 0 {
+			lineNum := fmt.Sprintf("%*d", lineNumWidth, vl.logicalRow+1)
+			b.WriteString(e.theme.Dimmed.Render(lineNum + " │ "))
+		} else {
+			blank := fmt.Sprintf("%*s", lineNumWidth, "")
+			b.WriteString(e.theme.Dimmed.Render(blank + " · "))
 		}
 
-		if i == e.cursorRow {
-			// Show cursor on this line
-			displayLine := e.renderLineWithCursor(line, maxLineWidth)
-			b.WriteString(displayLine)
-		} else {
-			// Regular line
-			if len(line) > maxLineWidth {
-				line = line[:maxLineWidth-3] + "..."
+		// Render line content
+		if i == cursorVRow {
+			// This visual line contains the cursor
+			localCol := e.cursorCol - vl.colOffset
+			if localCol < 0 {
+				localCol = 0
 			}
-			b.WriteString(e.theme.Normal.Render(line))
+			if localCol > len(vl.text) {
+				localCol = len(vl.text)
+			}
+
+			if localCol >= len(vl.text) {
+				// Cursor at end of this segment
+				b.WriteString(e.theme.Normal.Render(vl.text))
+				b.WriteString(cursorStyle.Render(" "))
+			} else {
+				before := vl.text[:localCol]
+				cursor := string(vl.text[localCol])
+				after := vl.text[localCol+1:]
+				b.WriteString(e.theme.Normal.Render(before))
+				b.WriteString(cursorStyle.Render(cursor))
+				b.WriteString(e.theme.Normal.Render(after))
+			}
+		} else {
+			b.WriteString(e.theme.Normal.Render(vl.text))
 		}
 
 		b.WriteString("\n")
@@ -537,57 +693,6 @@ func (e *Editor) renderEditMode(visibleLines int) string {
 	}
 
 	return b.String()
-}
-
-func (e *Editor) renderLineWithCursor(line string, maxWidth int) string {
-	cursorStyle := lipgloss.NewStyle().Reverse(true)
-
-	col := e.cursorCol
-	if col > len(line) {
-		col = len(line)
-	}
-
-	// Handle cursor at end of line
-	if col >= len(line) {
-		displayLine := line
-		if len(displayLine) > maxWidth-1 {
-			displayLine = displayLine[:maxWidth-4] + "..."
-		}
-		return e.theme.Normal.Render(displayLine) + cursorStyle.Render(" ")
-	}
-
-	// Cursor in middle of line
-	before := line[:col]
-	cursor := string(line[col])
-	after := line[col+1:]
-
-	// Truncate if needed
-	if len(line) > maxWidth {
-		// Keep cursor visible
-		if col < maxWidth-3 {
-			afterLen := maxWidth - col - 4
-			if afterLen < 0 {
-				afterLen = 0
-			}
-			if afterLen < len(after) {
-				after = after[:afterLen] + "..."
-			}
-		} else {
-			// Scroll line to show cursor
-			start := col - maxWidth/2
-			if start < 0 {
-				start = 0
-			}
-			before = "..." + line[start:col]
-			if col+maxWidth/2 < len(line) {
-				after = line[col+1:col+maxWidth/2] + "..."
-			} else {
-				after = line[col+1:]
-			}
-		}
-	}
-
-	return e.theme.Normal.Render(before) + cursorStyle.Render(cursor) + e.theme.Normal.Render(after)
 }
 
 // SetContent sets the editor content
@@ -685,12 +790,15 @@ func (e *Editor) ClearModified() {
 func (e *Editor) ScrollBy(delta int) {
 	e.viewOffset += delta
 
-	var maxOffset int
+	var totalLines int
 	if e.mode == EditorModeEdit {
-		maxOffset = len(e.lines) - e.visibleLines()
+		maxLineWidth := e.editMaxLineWidth()
+		vlines := e.buildVisualLines(maxLineWidth)
+		totalLines = len(vlines)
 	} else {
-		maxOffset = e.lineCount - e.visibleLines()
+		totalLines = e.lineCount
 	}
+	maxOffset := totalLines - e.visibleLines()
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
@@ -743,8 +851,8 @@ func (e *Editor) handleMouse(msg tea.MouseMsg) (*Editor, tea.Cmd) {
 	}
 
 	if e.mode == EditorModeEdit {
-		// Edit mode: precise cursor placement
-		row := relY + e.viewOffset
+		// Edit mode: precise cursor placement using visual lines
+		vrow := relY + e.viewOffset
 
 		// Calculate line number gutter width
 		lineNumWidth := len(fmt.Sprintf("%d", len(e.lines)))
@@ -753,24 +861,29 @@ func (e *Editor) handleMouse(msg tea.MouseMsg) (*Editor, tea.Cmd) {
 		}
 		col := relX - lineNumWidth - 3 // line number + " │ "
 
-		// Clamp row
-		if row < 0 {
-			row = 0
+		maxLineWidth := e.editMaxLineWidth()
+		vlines := e.buildVisualLines(maxLineWidth)
+
+		// Clamp visual row
+		if vrow < 0 {
+			vrow = 0
 		}
-		if row >= len(e.lines) {
-			row = len(e.lines) - 1
+		if vrow >= len(vlines) {
+			vrow = len(vlines) - 1
 		}
 
-		// Clamp col
+		vl := vlines[vrow]
+
+		// Clamp col within this visual line segment
 		if col < 0 {
 			col = 0
 		}
-		if row >= 0 && row < len(e.lines) && col > len(e.lines[row]) {
-			col = len(e.lines[row])
+		if col > len(vl.text) {
+			col = len(vl.text)
 		}
 
-		e.cursorRow = row
-		e.cursorCol = col
+		e.cursorRow = vl.logicalRow
+		e.cursorCol = vl.colOffset + col
 		e.ensureCursorVisible()
 	} else {
 		// View mode: enter edit mode with approximate cursor position

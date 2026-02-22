@@ -33,6 +33,8 @@ const (
 
 const maxAgentTabs = 8
 
+const refreshInterval = 5 * time.Second
+
 // AgentTab represents a single agent tab with its own PTY session
 type AgentTab struct {
 	id          string // unique tab ID
@@ -48,6 +50,10 @@ type AgentTab struct {
 	lastContentChange time.Time
 	prevContent       string
 	lastUserWrite     time.Time // when user last typed into the PTY
+
+	// Input buffer: accumulates user keystrokes to derive a tab title
+	// when the child process doesn't send one via OSC.
+	inputBuf []rune
 
 	// Hook-based state detection (Claude Code agents)
 	stateFile string // path to hook state file (empty if not a Claude agent)
@@ -98,8 +104,12 @@ type App struct {
 	message       string
 	quitting      bool
 
+	// Double-tap Ctrl+C quit protection
+	ctrlCPressedAt time.Time
+
 	// File watching
-	watchChan <-chan struct{}
+	watchChan       <-chan struct{}
+	lastRefreshTime time.Time
 
 	// Auto-preview tracking
 	prevCursor int
@@ -198,7 +208,7 @@ func (a *App) Init() tea.Cmd {
 
 	a.fileList.SetFocused(true)
 
-	return a.watchForChanges()
+	return tea.Batch(a.watchForChanges(), a.refreshTick())
 }
 
 // watchForChanges creates a command that watches for file changes
@@ -214,6 +224,15 @@ func (a *App) watchForChanges() tea.Cmd {
 }
 
 type fileChangedMsg struct{}
+type refreshTickMsg struct{}
+type ctrlCTimeoutMsg struct{}
+
+// refreshTick returns a tea.Cmd that fires a refreshTickMsg after refreshInterval
+func (a *App) refreshTick() tea.Cmd {
+	return tea.Tick(refreshInterval, func(time.Time) tea.Msg {
+		return refreshTickMsg{}
+	})
+}
 
 // isOnPlanningTab returns true if the planning tab is active
 func (a *App) isOnPlanningTab() bool {
@@ -272,19 +291,44 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Handle quit
+	// Handle quit: double-tap Ctrl+C to exit
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		if msg.String() == "ctrl+c" {
-			a.killAllSessions()
-			a.quitting = true
-			return a, tea.Quit
+			if !a.ctrlCPressedAt.IsZero() && time.Since(a.ctrlCPressedAt) < 2*time.Second {
+				// Second press within window — quit
+				a.killAllSessions()
+				a.quitting = true
+				return a, tea.Quit
+			}
+			// First press — start timeout window
+			a.ctrlCPressedAt = time.Now()
+			return a, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+				return ctrlCTimeoutMsg{}
+			})
 		}
+	}
+
+	// Handle Ctrl+C timeout: clear warning from status bar
+	if _, ok := msg.(ctrlCTimeoutMsg); ok {
+		a.ctrlCPressedAt = time.Time{}
+		return a, nil
 	}
 
 	// Handle file changes
 	if _, ok := msg.(fileChangedMsg); ok {
 		a.refreshFiles()
 		cmds = append(cmds, a.watchForChanges())
+		return a, tea.Batch(cmds...)
+	}
+
+	// Handle periodic refresh tick
+	if _, ok := msg.(refreshTickMsg); ok {
+		// Always re-chain the next tick
+		cmds = append(cmds, a.refreshTick())
+		// Debounce: skip if refreshed recently (e.g. fsnotify already fired)
+		if time.Since(a.lastRefreshTime) >= 2*time.Second {
+			a.refreshFiles()
+		}
 		return a, tea.Batch(cmds...)
 	}
 
@@ -361,6 +405,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
 			a.sessionBackend.Write(tab.session.BackendHandle, msg.Data)
 			tab.lastUserWrite = time.Now()
+
+			// Accumulate user keystrokes to derive a tab title.
+			a.trackInputForTitle(tab, msg.Data)
+
 			// Clear needs_input on user interaction (they responded to the prompt)
 			if tab.panel.GetStatus() == "needs_input" {
 				tab.panel.SetStatus("idle")
@@ -974,6 +1022,50 @@ func (a *App) computeTabLabel(tab *AgentTab) string {
 	return tab.baseLabel
 }
 
+// trackInputForTitle accumulates user keystrokes and, on Enter, derives a
+// tab title from the submitted line. This ensures slash commands (which
+// don't trigger an OSC title from the child process) still produce a
+// meaningful tab label. The OSC title, when it arrives, will overwrite
+// this input-derived title naturally.
+func (a *App) trackInputForTitle(tab *AgentTab, data []byte) {
+	for _, b := range data {
+		switch {
+		case b == '\r' || b == '\n':
+			if len(tab.inputBuf) > 0 {
+				line := strings.TrimSpace(string(tab.inputBuf))
+				// Strip leading slash so "/plan fix auth" → "plan fix auth"
+				line = strings.TrimLeft(line, "/")
+				if title := sanitizeTabTitle(line); title != "" {
+					if len([]rune(title)) > maxTabTitleLen {
+						title = string([]rune(title)[:maxTabTitleLen-1]) + "..."
+					}
+					tab.customTitle = title
+					a.syncTabBar()
+				}
+				tab.inputBuf = nil
+			}
+		case b == 0x7f: // backspace
+			if len(tab.inputBuf) > 0 {
+				tab.inputBuf = tab.inputBuf[:len(tab.inputBuf)-1]
+			}
+		case b == 0x03 || b == 0x1b: // Ctrl+C or Escape — discard
+			tab.inputBuf = nil
+		case b == 0x15: // Ctrl+U — clear line
+			tab.inputBuf = nil
+		case b == 0x17: // Ctrl+W — delete word
+			// Trim trailing spaces, then trim to last space
+			for len(tab.inputBuf) > 0 && tab.inputBuf[len(tab.inputBuf)-1] == ' ' {
+				tab.inputBuf = tab.inputBuf[:len(tab.inputBuf)-1]
+			}
+			for len(tab.inputBuf) > 0 && tab.inputBuf[len(tab.inputBuf)-1] != ' ' {
+				tab.inputBuf = tab.inputBuf[:len(tab.inputBuf)-1]
+			}
+		case b >= 0x20 && b < 0x7f: // printable ASCII
+			tab.inputBuf = append(tab.inputBuf, rune(b))
+		}
+	}
+}
+
 // minTabTitleLen is the minimum rune length for a title to be considered useful.
 // Shorter values (e.g. single characters, emoji, program names like "~") are
 // treated as resets and ignored.
@@ -1191,6 +1283,11 @@ func (a *App) handlePlanningTabKey(key string, msg tea.KeyMsg) tea.Cmd {
 				}
 			}
 
+		case "r":
+			// Manual refresh
+			a.refreshFiles()
+			a.message = "Files refreshed"
+
 		case "o":
 			// Open folder picker
 			a.showFolderPicker()
@@ -1241,6 +1338,8 @@ func (a *App) loadFile(name string) {
 }
 
 func (a *App) refreshFiles() {
+	a.lastRefreshTime = time.Now()
+
 	if err := a.workspace.Refresh(); err != nil {
 		a.message = fmt.Sprintf("Error refreshing: %v", err)
 		return
@@ -1249,6 +1348,27 @@ func (a *App) refreshFiles() {
 	files := a.workspace.Files()
 	a.fileList.SetFiles(files)
 	a.prevCursor = a.fileList.Cursor()
+
+	// Stale editor detection: check if the displayed file still exists
+	editorFile := a.editor.FileName()
+	if editorFile != "" {
+		found := false
+		for _, f := range files {
+			if f.Name == editorFile {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if a.editor.Mode() == ui.EditorModeEdit {
+				// Preserve content in edit mode, just warn
+				a.message = "Warning: file no longer exists on disk"
+			} else {
+				a.editor.SetContent("", "")
+				a.message = "File no longer exists"
+			}
+		}
+	}
 }
 
 // View renders the application
@@ -1316,7 +1436,9 @@ func (a *App) View() string {
 func (a *App) renderStatusBar() string {
 	// Build status bar content
 	var leftContent string
-	if a.message != "" {
+	if !a.ctrlCPressedAt.IsZero() && time.Since(a.ctrlCPressedAt) < 2*time.Second {
+		leftContent = a.theme.StatusFailed.Render("Press Ctrl+C again to quit")
+	} else if a.message != "" {
 		leftContent = a.theme.Normal.Render(a.message)
 		a.message = "" // Clear after showing
 	} else if a.folderPickerVisible {
@@ -1327,7 +1449,7 @@ func (a *App) renderStatusBar() string {
 			if a.editor.Mode() == ui.EditorModeEdit {
 				leftContent = a.theme.KeyHint.Render("[Esc] save & exit  [Ctrl+S] save")
 			} else {
-				leftContent = a.theme.KeyHint.Render("[^|v] navigate  [e] edit  [n] new  [d] delete  [o] folder  [a] agent  [s] settings  [Tab] cycle")
+				leftContent = a.theme.KeyHint.Render("[^|v] navigate  [e] edit  [n] new  [d] delete  [r] refresh  [o] folder  [a] agent  [s] settings  [Tab] cycle")
 			}
 		} else {
 			panel := a.activePanel()

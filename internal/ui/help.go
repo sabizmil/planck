@@ -108,7 +108,7 @@ func (h *Help) renderHelpContent() string {
 		{"x / Ctrl+X", "Close current agent tab"},
 		{"s", "Settings"},
 		{"?", "Toggle this help"},
-		{"q / Ctrl+c", "Quit"},
+		{"q / Ctrl+C ×2", "Quit"},
 	}))
 	sb.WriteString("\n")
 
@@ -125,6 +125,7 @@ func (h *Help) renderHelpContent() string {
 		{"n", "New file"},
 		{"c", "Toggle complete"},
 		{"d", "Delete file"},
+		{"r", "Refresh file list"},
 		{"o", "Switch folder"},
 	}))
 	sb.WriteString("\n")

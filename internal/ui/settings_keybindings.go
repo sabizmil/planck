@@ -30,7 +30,7 @@ var keybindingContexts = []keybindingContext{
 			{"x / Ctrl+X", "Close agent tab"},
 			{"s", "Settings"},
 			{"?", "Toggle help"},
-			{"q / Ctrl+c", "Quit"},
+			{"q / Ctrl+C ×2", "Quit"},
 		},
 	},
 	{
