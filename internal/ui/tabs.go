@@ -9,37 +9,46 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Braille spinner frames for running tabs
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
 // SpinnerTickMsg advances the spinner animation
 type SpinnerTickMsg struct{}
 
 // TabInfo describes a single tab in the tab bar
 type TabInfo struct {
 	Label  string // Display label (e.g., "Planning", "Claude #1")
-	Status string // "running", "completed", "" (only for agent tabs)
+	Status string // "running", "idle", "needs_input", "completed", "" (agent tabs only)
 }
 
 // TabBar displays the tab bar at the top of the screen
 type TabBar struct {
-	theme        *Theme
-	tabs         []TabInfo // tabs[0] is always Planning
-	activeIdx    int
-	folderPath   string
-	width        int
-	spinnerFrame int
+	theme           *Theme
+	tabs            []TabInfo // tabs[0] is always Planning
+	activeIdx       int
+	folderPath      string
+	width           int
+	spinnerFrame    int
+	spinnerFrames   []string
+	spinnerInterval time.Duration
 }
 
 // NewTabBar creates a new tab bar with a Planning tab
 func NewTabBar(theme *Theme) *TabBar {
+	preset := SpinnerPresetByName(DefaultSpinnerPreset())
 	return &TabBar{
 		theme: theme,
 		tabs: []TabInfo{
 			{Label: "Planning"},
 		},
-		activeIdx: 0,
+		activeIdx:       0,
+		spinnerFrames:   preset.Frames,
+		spinnerInterval: preset.Interval,
 	}
+}
+
+// SetSpinner updates the spinner animation to use the given preset.
+func (t *TabBar) SetSpinner(preset SpinnerPreset) {
+	t.spinnerFrames = preset.Frames
+	t.spinnerInterval = preset.Interval
+	t.spinnerFrame = 0
 }
 
 // Init initializes the tab bar
@@ -50,7 +59,7 @@ func (t *TabBar) Init() tea.Cmd {
 // Update handles messages (tab bar is now driven externally by App)
 func (t *TabBar) Update(msg tea.Msg) (*TabBar, tea.Cmd) {
 	if _, ok := msg.(SpinnerTickMsg); ok {
-		t.spinnerFrame = (t.spinnerFrame + 1) % len(spinnerFrames)
+		t.spinnerFrame = (t.spinnerFrame + 1) % len(t.spinnerFrames)
 		if t.HasRunningTabs() {
 			return t, t.Tick()
 		}
@@ -58,9 +67,13 @@ func (t *TabBar) Update(msg tea.Msg) (*TabBar, tea.Cmd) {
 	return t, nil
 }
 
-// Tick returns a command that fires a SpinnerTickMsg after 80ms
+// Tick returns a command that fires a SpinnerTickMsg after the configured interval.
 func (t *TabBar) Tick() tea.Cmd {
-	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
+	interval := t.spinnerInterval
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
+	return tea.Tick(interval, func(time.Time) tea.Msg {
 		return SpinnerTickMsg{}
 	})
 }
@@ -95,6 +108,17 @@ func (t *TabBar) View() string {
 		Foreground(t.theme.Accent).
 		Padding(0, 2)
 
+	needsInputStyle := lipgloss.NewStyle().
+		Foreground(t.theme.Error).
+		Padding(0, 2)
+
+	// Active tab variant for needs_input — keep the active background but use red text
+	activeNeedsInputStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(t.theme.Error).
+		Background(lipgloss.Color("#1a1a1a")).
+		Padding(0, 2)
+
 	// Build tabs
 	var tabs strings.Builder
 
@@ -104,20 +128,29 @@ func (t *TabBar) View() string {
 		}
 
 		label := tab.Label
-		// Add status indicator for agent tabs
-		if tab.Status == "completed" && i > 0 {
-			label += " " + IndicatorDone
+		// Add status indicator for agent tabs (always left-aligned before label)
+		if tab.Status == "needs_input" && i > 0 {
+			label = IndicatorActive + " " + label
+		} else if (tab.Status == "completed" || tab.Status == "idle") && i > 0 {
+			label = IndicatorDone + " " + label
 		} else if tab.Status == "running" && i > 0 {
-			label = spinnerFrames[t.spinnerFrame] + " " + label
+			label = t.spinnerFrames[t.spinnerFrame%len(t.spinnerFrames)] + " " + label
 		}
 
 		// Add number prefix
 		numLabel := fmt.Sprintf("%d:%s", i+1, label)
 
 		tabs.WriteString("[")
-		if i == t.activeIdx {
+		if tab.Status == "needs_input" && i > 0 {
+			// Needs input always uses red styling, even when active
+			if i == t.activeIdx {
+				tabs.WriteString(activeNeedsInputStyle.Render(numLabel))
+			} else {
+				tabs.WriteString(needsInputStyle.Render(numLabel))
+			}
+		} else if i == t.activeIdx {
 			tabs.WriteString(activeStyle.Render(numLabel))
-		} else if tab.Status == "completed" && i > 0 {
+		} else if (tab.Status == "completed" || tab.Status == "idle") && i > 0 {
 			tabs.WriteString(completedStyle.Render(numLabel))
 		} else if tab.Status == "running" && i > 0 {
 			tabs.WriteString(runningStyle.Render(numLabel))

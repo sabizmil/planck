@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -41,6 +43,14 @@ type AgentTab struct {
 	session     *session.Session
 	panel       *ui.PTYPanel
 	agentCfg    config.AgentConfig
+
+	// Idle detection: track when PTY content last changed
+	lastContentChange time.Time
+	prevContent       string
+	lastUserWrite     time.Time // when user last typed into the PTY
+
+	// Hook-based state detection (Claude Code agents)
+	stateFile string // path to hook state file (empty if not a Claude agent)
 }
 
 // App is the main application model
@@ -152,12 +162,15 @@ func New(cfg *config.Config, configDir, folder string, backend *session.PTYBacke
 		editor:          editor,
 		dialog:          ui.NewDialog(theme),
 		help:            ui.NewHelp(theme),
-		settings:        ui.NewSettings(theme, registry, styleCfg, generalCfg, agentsCfg),
+		settings:        ui.NewSettings(theme, registry, styleCfg, generalCfg, agentsCfg, cfg.Preferences.SpinnerStyle),
 		styleRegistry:   registry,
 		activeTabIdx:    0,
 		focus:           FocusFileList,
 		nextInstanceNum: make(map[string]int),
 	}
+
+	// Apply configured spinner style to tab bar
+	app.tabs.SetSpinner(ui.SpinnerPresetByName(cfg.Preferences.SpinnerStyle))
 
 	// Set folder path in tab bar
 	app.tabs.SetFolderPath(folder)
@@ -329,17 +342,71 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
+	// Handle spinner settings changes from settings panel
+	if msg, ok := msg.(ui.SpinnerSettingsChangedMsg); ok {
+		a.config.Preferences.SpinnerStyle = msg.Style
+		_ = a.config.Save()
+		a.tabs.SetSpinner(ui.SpinnerPresetByName(msg.Style))
+		// Restart spinner tick if tabs are running so new interval takes effect
+		if a.tabs.HasRunningTabs() {
+			cmds = append(cmds, a.tabs.Tick())
+		}
+		return a, tea.Batch(cmds...)
+	}
+
 	// Handle PTY messages BEFORE overlay checks — polling must never be
 	// interrupted by dialogs, help, or folder picker, otherwise the polling
 	// chain breaks and the tab goes permanently silent.
 	if msg, ok := msg.(ui.PTYWriteMsg); ok {
 		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
 			a.sessionBackend.Write(tab.session.BackendHandle, msg.Data)
+			tab.lastUserWrite = time.Now()
+			// Clear needs_input on user interaction (they responded to the prompt)
+			if tab.panel.GetStatus() == "needs_input" {
+				tab.panel.SetStatus("idle")
+				a.clearHookState(tab)
+				a.syncTabBar()
+			}
 		}
 	}
 
 	if msg, ok := msg.(ui.PTYRenderMsg); ok {
 		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
+			// Idle detection: track content changes
+			contentChanged := msg.Content != tab.prevContent
+			tab.prevContent = msg.Content
+
+			// Don't attribute content changes to the agent if the user just typed.
+			// Terminal echo from keystrokes causes content changes that aren't agent output.
+			userRecentlyTyped := !tab.lastUserWrite.IsZero() && time.Since(tab.lastUserWrite) < 1*time.Second
+
+			if contentChanged {
+				tab.lastContentChange = time.Now()
+				// Resume from idle/needs_input only if agent is producing output
+				// (not just the terminal echoing the user's keystrokes)
+				if !userRecentlyTyped {
+					if status := tab.panel.GetStatus(); status == "idle" || status == "needs_input" {
+						tab.panel.SetStatus("running")
+						a.clearHookState(tab)
+						a.syncTabBar()
+					}
+				}
+			} else if tab.panel.GetStatus() == "running" && !userRecentlyTyped {
+				// Content unchanged — check for state transitions
+
+				// Hook state is checked immediately (no timeout) so permission
+				// prompts get a red dot within one poll cycle (~50ms).
+				if state := a.readHookState(tab); state == "needs_input" {
+					tab.panel.SetStatus("needs_input")
+					a.syncTabBar()
+				} else if !tab.lastContentChange.IsZero() &&
+					time.Since(tab.lastContentChange) > 3*time.Second {
+					// No output for 3s and no hook state — agent is idle
+					tab.panel.SetStatus("idle")
+					a.syncTabBar()
+				}
+			}
+
 			tab.panel.SetContent(msg.Content)
 			// Update tab title if the child process set a meaningful one via OSC.
 			// Once we have a good title, keep it — don't let resets overwrite it.
@@ -354,16 +421,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(ui.PTYExitedMsg); ok {
 		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
 			tab.panel.SetStatus("completed")
+			a.cleanupHookState(tab)
 			a.syncTabBar()
 			a.message = fmt.Sprintf("%s completed (exit code: %d)", tab.baseLabel, msg.ExitCode)
 		}
 	}
 
-	// Handle spinner tick — forward to tab bar
+	// Handle spinner tick — forward to tab bar and settings (for live preview)
 	if _, ok := msg.(ui.SpinnerTickMsg); ok {
 		_, cmd := a.tabs.Update(msg)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
+		}
+		if a.settings.IsVisible() {
+			a.settings.Update(msg)
+			// Keep tick running for settings preview even without running tabs
+			if cmd == nil {
+				cmds = append(cmds, a.tabs.Tick())
+			}
 		}
 		return a, tea.Batch(cmds...)
 	}
@@ -565,6 +640,10 @@ func (a *App) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		a.settings.Toggle()
+		// Start spinner tick for settings live preview if no running tabs
+		if a.settings.IsVisible() && !a.tabs.HasRunningTabs() {
+			return a.tabs.Tick()
+		}
 		return nil
 
 	case "a":
@@ -745,11 +824,21 @@ func (a *App) launchAgentTab(agentKey string) tea.Cmd {
 
 	// Build args for launch — filter interactive-safe args from PlanningArgs
 	var launchArgs []string
+	hasSkipPerms := false
 	for _, arg := range agentCfg.PlanningArgs {
 		switch arg {
 		case "--dangerously-skip-permissions", "--full-auto":
 			launchArgs = append(launchArgs, arg)
+			hasSkipPerms = true
 		}
+	}
+
+	// For Claude Code agents: inject hooks to detect permission prompts.
+	// Only useful when permissions are NOT skipped (otherwise there are no prompts).
+	if agentCfg.Command == "claude" && !hasSkipPerms {
+		stateFile := filepath.Join(os.TempDir(), fmt.Sprintf("planck-%s-state", tab.id))
+		tab.stateFile = stateFile
+		launchArgs = append(launchArgs, "--settings", hookSettingsJSON(stateFile))
 	}
 
 	// Launch the session
@@ -831,6 +920,9 @@ func (a *App) removeAgentTab(tab *AgentTab) {
 	if tab.session != nil {
 		_ = a.sessionBackend.Kill(tab.session.BackendHandle)
 	}
+
+	// Clean up hook state files
+	a.cleanupHookState(tab)
 
 	// Find and remove from slice
 	for i, t := range a.agentTabs {
@@ -930,7 +1022,15 @@ func (a *App) syncTabBar() {
 			case session.StatusCompleted:
 				status = "completed"
 			case session.StatusRunning:
-				status = "running"
+				// Respect panel-level status for idle/needs_input states
+				switch tab.panel.GetStatus() {
+				case "idle":
+					status = "idle"
+				case "needs_input":
+					status = "needs_input"
+				default:
+					status = "running"
+				}
 			}
 		}
 		tabs = append(tabs, ui.TabInfo{
@@ -1002,6 +1102,7 @@ func (a *App) killAllSessions() {
 		if tab.session != nil {
 			_ = a.sessionBackend.Kill(tab.session.BackendHandle)
 		}
+		a.cleanupHookState(tab)
 	}
 }
 
@@ -1435,6 +1536,42 @@ func (m *FolderPickerModel) View() string {
 		m.picker.SetSize(m.width-4, m.height-4)
 	}
 	return m.picker.View()
+}
+
+// hookSettingsJSON returns a --settings JSON string that configures Claude Code
+// hooks to write state changes to the given file path. This enables Planck to
+// detect when the agent needs human input (permission prompts).
+func hookSettingsJSON(stateFile string) string {
+	// The hook command writes "needs_input" to the state file when Claude
+	// shows a permission prompt. The command is a simple shell one-liner
+	// so it runs instantly with no dependencies.
+	cmd := fmt.Sprintf("echo needs_input > %s", stateFile)
+	return fmt.Sprintf(`{"hooks":{"Notification":[{"matcher":"permission_prompt","hooks":[{"type":"command","command":"%s"}]}]}}`, cmd)
+}
+
+// readHookState reads the hook state file for a tab. Returns the state string
+// (e.g., "needs_input") or empty string if no state is set.
+func (a *App) readHookState(tab *AgentTab) string {
+	if tab.stateFile == "" {
+		return ""
+	}
+	data, err := os.ReadFile(tab.stateFile)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// clearHookState removes the hook state file so the tab returns to normal state.
+func (a *App) clearHookState(tab *AgentTab) {
+	if tab.stateFile != "" {
+		os.Remove(tab.stateFile)
+	}
+}
+
+// cleanupHookState removes hook state files when a tab is done.
+func (a *App) cleanupHookState(tab *AgentTab) {
+	a.clearHookState(tab)
 }
 
 // loadMarkdownStyleFromConfig converts config.MarkdownStyle to ui.MarkdownStyleConfig

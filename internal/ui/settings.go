@@ -81,7 +81,7 @@ type Settings struct {
 }
 
 // NewSettings creates a new settings panel.
-func NewSettings(theme *Theme, registry *StyleRegistry, mdCfg MarkdownStyleConfig, generalCfg GeneralSettingsChangedMsg, agentsCfg map[string]AgentSettingsConfig) *Settings {
+func NewSettings(theme *Theme, registry *StyleRegistry, mdCfg MarkdownStyleConfig, generalCfg GeneralSettingsChangedMsg, agentsCfg map[string]AgentSettingsConfig, spinnerStyle string) *Settings {
 	s := &Settings{
 		theme: theme,
 		categories: []settingsCategory{
@@ -89,6 +89,7 @@ func NewSettings(theme *Theme, registry *StyleRegistry, mdCfg MarkdownStyleConfi
 			{Name: "General", Page: newGeneralPage(theme, generalCfg)},
 			{Name: "Agents", Page: newAgentsPage(theme, agentsCfg)},
 			{Name: "Keys", Page: newKeybindingsPage(theme)},
+			{Name: "Spinner", Page: newSpinnerPage(theme, spinnerStyle)},
 		},
 	}
 	return s
@@ -108,6 +109,11 @@ func (s *Settings) Update(msg tea.Msg) (*Settings, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return s.handleKey(msg)
+	case SpinnerTickMsg:
+		// Forward spinner ticks to the spinner page for live preview animation
+		if sp, ok := s.categories[s.sidebarIdx].Page.(*spinnerPage); ok {
+			sp.AdvancePreview()
+		}
 	}
 
 	return s, nil

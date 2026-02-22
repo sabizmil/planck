@@ -383,6 +383,11 @@ func (p *PTYPanel) SetStatus(status string) {
 	p.status = status
 }
 
+// GetStatus returns the current session status
+func (p *PTYPanel) GetStatus() string {
+	return p.status
+}
+
 // GetSessionID returns the current session ID
 func (p *PTYPanel) GetSessionID() string {
 	return p.sessionID

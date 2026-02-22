@@ -34,8 +34,9 @@ type AgentConfig struct {
 
 // Preferences holds user preferences
 type Preferences struct {
-	Editor     string `toml:"editor"`
-	TmuxPrefix string `toml:"tmux_prefix"`
+	Editor       string `toml:"editor"`
+	TmuxPrefix   string `toml:"tmux_prefix"`
+	SpinnerStyle string `toml:"spinner_style"`
 }
 
 // MarkdownStyle configures the markdown rendering style
@@ -88,8 +89,9 @@ func DefaultConfig() *Config {
 			},
 		},
 		Preferences: Preferences{
-			Editor:     "",
-			TmuxPrefix: "planck",
+			Editor:       "",
+			TmuxPrefix:   "planck",
+			SpinnerStyle: "claude",
 		},
 		Notifications: Notifications{
 			Bell: true,
