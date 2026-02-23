@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,6 +30,11 @@ var generalFields = []generalField{
 		Label:    "Terminal Bell",
 		Kind:     "toggle",
 		HintText: "Ring the terminal bell\nwhen agents complete.",
+	},
+	{
+		Label:    "Sidebar Width",
+		Kind:     "number",
+		HintText: "Width of the file sidebar\nin characters (16–60).\n\nDrag the sidebar border\nwith the mouse to resize\ninteractively.",
 	},
 	{
 		Label:    "Session Backend",
@@ -63,6 +69,7 @@ type generalPage struct {
 	// Values
 	editor         string
 	bell           bool
+	sidebarWidth   int
 	backend        string
 	defaultScope   string
 	autoAdvance    bool
@@ -78,10 +85,15 @@ type generalPage struct {
 }
 
 func newGeneralPage(theme *Theme, cfg GeneralSettingsChangedMsg) *generalPage {
+	sw := cfg.SidebarWidth
+	if sw == 0 {
+		sw = 28
+	}
 	return &generalPage{
 		theme:          theme,
 		editor:         cfg.Editor,
 		bell:           cfg.Bell,
+		sidebarWidth:   sw,
 		backend:        cfg.Backend,
 		defaultScope:   cfg.DefaultScope,
 		autoAdvance:    cfg.AutoAdvance,
@@ -111,6 +123,7 @@ func (p *generalPage) OnLeave() tea.Cmd {
 		return GeneralSettingsChangedMsg{
 			Editor:         p.editor,
 			Bell:           p.bell,
+			SidebarWidth:   p.sidebarWidth,
 			Backend:        p.backend,
 			DefaultScope:   p.defaultScope,
 			AutoAdvance:    p.autoAdvance,
@@ -141,6 +154,15 @@ func (p *generalPage) Update(msg tea.KeyMsg) tea.Cmd {
 		p.activateField()
 
 	case "h", "left":
+		field := generalFields[p.selectedIdx]
+		if field.Kind == "number" {
+			p.adjustNumberField(-1)
+			return nil
+		}
+		if field.Kind == "cycle" {
+			p.cycleField(-1)
+			return nil
+		}
 		// signal to parent: go to sidebar
 		return nil
 	}
@@ -197,6 +219,8 @@ func (p *generalPage) activateField() {
 		p.toggleField()
 	case "cycle":
 		p.cycleField(1)
+	case "number":
+		p.adjustNumberField(1)
 	case "text":
 		p.editing = true
 		p.editValue = p.getFieldValue(p.selectedIdx)
@@ -208,7 +232,7 @@ func (p *generalPage) toggleField() {
 	switch p.selectedIdx {
 	case 1: // Bell
 		p.bell = !p.bell
-	case 4: // Auto Advance
+	case 5: // Auto Advance
 		p.autoAdvance = !p.autoAdvance
 	}
 }
@@ -227,12 +251,25 @@ func (p *generalPage) cycleField(dir int) {
 	next := (idx + dir + len(field.Options)) % len(field.Options)
 
 	switch p.selectedIdx {
-	case 2: // Backend
+	case 3: // Backend
 		p.backend = field.Options[next]
-	case 3: // Default Scope
+	case 4: // Default Scope
 		p.defaultScope = field.Options[next]
-	case 5: // Permission Mode
+	case 6: // Permission Mode
 		p.permissionMode = field.Options[next]
+	}
+}
+
+func (p *generalPage) adjustNumberField(dir int) {
+	switch p.selectedIdx {
+	case 2: // Sidebar Width
+		p.sidebarWidth += dir * 2
+		if p.sidebarWidth < 16 {
+			p.sidebarWidth = 16
+		}
+		if p.sidebarWidth > 60 {
+			p.sidebarWidth = 60
+		}
 	}
 }
 
@@ -246,15 +283,17 @@ func (p *generalPage) getFieldValue(idx int) string {
 		}
 		return "Off"
 	case 2:
-		return p.backend
+		return strconv.Itoa(p.sidebarWidth)
 	case 3:
-		return p.defaultScope
+		return p.backend
 	case 4:
+		return p.defaultScope
+	case 5:
 		if p.autoAdvance {
 			return "On"
 		}
 		return "Off"
-	case 5:
+	case 6:
 		return p.permissionMode
 	}
 	return ""
@@ -310,7 +349,7 @@ func (p *generalPage) renderFields(optionsWidth, height int) string {
 			sb.WriteString(line)
 		} else if isSelected {
 			switch field.Kind {
-			case "cycle":
+			case "cycle", "number":
 				sb.WriteString(p.theme.Selected.Render(fmt.Sprintf(" \u25C0 %s \u25B6", value)))
 			case "toggle":
 				indicator := "\u25CF"

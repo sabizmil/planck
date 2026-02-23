@@ -22,6 +22,7 @@ type GeneralSettingsChangedMsg struct {
 	DefaultScope   string
 	AutoAdvance    bool
 	PermissionMode string
+	SidebarWidth   int
 }
 
 // AgentsSettingsChangedMsg is emitted when the user changes agent settings.

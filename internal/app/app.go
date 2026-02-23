@@ -101,6 +101,7 @@ type App struct {
 	// Current state
 	focus         Focus
 	width, height int
+	sidebarWidth  int
 	message       string
 	quitting      bool
 
@@ -113,6 +114,9 @@ type App struct {
 
 	// Auto-preview tracking
 	prevCursor int
+
+	// Sidebar drag-resize state
+	draggingSidebar bool
 }
 
 // New creates a new application
@@ -144,6 +148,7 @@ func New(cfg *config.Config, configDir, folder string, backend *session.PTYBacke
 	generalCfg := ui.GeneralSettingsChangedMsg{
 		Editor:         cfg.Preferences.Editor,
 		Bell:           cfg.Notifications.Bell,
+		SidebarWidth:   cfg.Preferences.SidebarWidth,
 		Backend:        cfg.Session.Backend,
 		DefaultScope:   cfg.Execution.DefaultScope,
 		AutoAdvance:    cfg.Execution.AutoAdvance,
@@ -157,6 +162,14 @@ func New(cfg *config.Config, configDir, folder string, backend *session.PTYBacke
 			PlanningArgs: a.PlanningArgs,
 			Default:      a.Default,
 		}
+	}
+
+	sidebarWidth := cfg.Preferences.SidebarWidth
+	if sidebarWidth < 16 {
+		sidebarWidth = 16
+	}
+	if sidebarWidth > 60 {
+		sidebarWidth = 60
 	}
 
 	app := &App{
@@ -176,6 +189,7 @@ func New(cfg *config.Config, configDir, folder string, backend *session.PTYBacke
 		styleRegistry:   registry,
 		activeTabIdx:    0,
 		focus:           FocusFileList,
+		sidebarWidth:    sidebarWidth,
 		nextInstanceNum: make(map[string]int),
 	}
 
@@ -363,6 +377,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.config.Execution.DefaultScope = msg.DefaultScope
 		a.config.Execution.AutoAdvance = msg.AutoAdvance
 		a.config.Execution.PermissionMode = msg.PermissionMode
+		if msg.SidebarWidth >= 16 && msg.SidebarWidth <= 60 {
+			a.config.Preferences.SidebarWidth = msg.SidebarWidth
+			a.sidebarWidth = msg.SidebarWidth
+			a.updateSizes()
+		}
 		_ = a.config.Save()
 		return a, nil
 	}
@@ -566,9 +585,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	}
 
-	// Handle mouse events on planning tab
+	// Handle mouse events on planning tab (and drag release anywhere)
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
-		if a.isOnPlanningTab() {
+		if a.isOnPlanningTab() || a.draggingSidebar {
 			cmd := a.handlePlanningMouse(mouseMsg)
 			if cmd != nil {
 				cmds = append(cmds, cmd)
@@ -1306,9 +1325,50 @@ func (a *App) handlePlanningMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
+	borderCol := a.sidebarWidth // the border sits at this column
+
+	// Start drag: mouse down on or near the sidebar border (±1 col tolerance)
+	if msg.Button == tea.MouseButtonLeft && me.Action == tea.MouseActionPress {
+		if msg.X >= borderCol-1 && msg.X <= borderCol+1 {
+			a.draggingSidebar = true
+			return nil
+		}
+	}
+
+	// During drag: update sidebar width as mouse moves
+	if a.draggingSidebar {
+		if me.Action == tea.MouseActionMotion {
+			newWidth := msg.X
+			if newWidth < 16 {
+				newWidth = 16
+			}
+			if newWidth > 60 {
+				newWidth = 60
+			}
+			// Ensure editor gets at least 40 columns
+			if a.width-newWidth < 40 {
+				newWidth = a.width - 40
+				if newWidth < 16 {
+					newWidth = 16
+				}
+			}
+			if newWidth != a.sidebarWidth {
+				a.sidebarWidth = newWidth
+				a.updateSizes()
+			}
+			return nil
+		}
+		// End drag: mouse release — persist width to config
+		if me.Action == tea.MouseActionRelease {
+			a.draggingSidebar = false
+			a.config.Preferences.SidebarWidth = a.sidebarWidth
+			_ = a.config.Save()
+			return nil
+		}
+	}
+
 	// Left click on editor area: switch focus and place cursor
-	fileListWidth := 24
-	if msg.Button == tea.MouseButtonLeft && me.Action == tea.MouseActionPress && msg.X >= fileListWidth+1 {
+	if msg.Button == tea.MouseButtonLeft && me.Action == tea.MouseActionPress && msg.X >= a.sidebarWidth+1 {
 		if a.focus != FocusEditor {
 			a.focus = FocusEditor
 			a.editor.SetFocused(true)
@@ -1479,11 +1539,15 @@ func (a *App) renderStatusBar() string {
 
 func (a *App) updateSizes() {
 	// Layout calculations
-	fileListWidth := 24
-	editorWidth := a.width - fileListWidth
-	if editorWidth < 40 {
-		editorWidth = 40
+	fileListWidth := a.sidebarWidth
+	// Ensure editor gets at least 40 columns
+	if a.width-fileListWidth < 40 {
+		fileListWidth = a.width - 40
+		if fileListWidth < 16 {
+			fileListWidth = 16
+		}
 	}
+	editorWidth := a.width - fileListWidth
 
 	contentHeight := a.height - 4 // Tab bar + status bar
 

@@ -4,11 +4,21 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/anthropics/planck/internal/workspace"
 )
+
+// padToWidth pads a string with spaces so it reaches the given rune width.
+func padToWidth(s string, width int) string {
+	runeLen := utf8.RuneCountInString(s)
+	if runeLen >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-runeLen)
+}
 
 // treeNode represents a node in the file tree (either a directory or a file)
 type treeNode struct {
@@ -252,13 +262,11 @@ func (f *FileList) View() string {
 			isSelected := f.focused && i == f.cursor
 			indent := safeRepeat("  ", node.depth)
 
+			// Available content width inside the sidebar (excluding the right border)
+			contentWidth := f.width - 2
+
 			if node.isDir {
 				// Directory node
-				prefix := " "
-				if isSelected {
-					prefix = f.theme.Selected.Render(IndicatorSelected)
-				}
-
 				arrow := IndicatorFolderOpen
 				if !node.expanded {
 					arrow = IndicatorFolderClosed
@@ -269,9 +277,10 @@ func (f *FileList) View() string {
 
 				var line string
 				if isSelected {
-					line = f.theme.TreeSelected.Render(fmt.Sprintf("%s%s%s %s", prefix, indent, arrow, dirName))
+					raw := fmt.Sprintf("%s%s%s %s", IndicatorSelected, indent, arrow, dirName)
+					line = f.theme.TreeSelected.Render(padToWidth(raw, contentWidth))
 				} else {
-					line = f.theme.TreeItem.Render(fmt.Sprintf("%s%s%s %s", prefix, indent, arrow, dirName))
+					line = f.theme.TreeItem.Render(fmt.Sprintf(" %s%s %s", indent, arrow, dirName))
 				}
 
 				b.WriteString(line)
@@ -280,21 +289,15 @@ func (f *FileList) View() string {
 				// File node
 				file := node.file
 
-				// Status indicator
-				var indicator string
+				// Status indicator character
+				var indicatorChar string
 				switch file.Status {
 				case workspace.StatusCompleted:
-					indicator = f.theme.StatusDone.Render(IndicatorDone)
+					indicatorChar = IndicatorDone
 				case workspace.StatusInProgress:
-					indicator = f.theme.StatusProgress.Render(IndicatorInProgress)
+					indicatorChar = IndicatorInProgress
 				default:
-					indicator = f.theme.StatusPending.Render(IndicatorPending)
-				}
-
-				// Selection indicator
-				prefix := " "
-				if isSelected {
-					prefix = f.theme.Selected.Render(IndicatorSelected)
+					indicatorChar = IndicatorPending
 				}
 
 				// File name (truncate if needed)
@@ -302,11 +305,24 @@ func (f *FileList) View() string {
 				name := truncate(node.name, maxLen)
 				var line string
 				if isSelected {
-					line = f.theme.SidebarSelected.Render(fmt.Sprintf("%s%s%s %s", prefix, indent, indicator, name))
-				} else if file.Status == workspace.StatusCompleted {
-					line = f.theme.Dimmed.PaddingLeft(1).Render(fmt.Sprintf("%s%s%s %s", prefix, indent, indicator, name))
+					raw := fmt.Sprintf("%s%s%s %s", IndicatorSelected, indent, indicatorChar, name)
+					line = f.theme.SidebarSelected.Render(padToWidth(raw, contentWidth))
 				} else {
-					line = f.theme.SidebarItem.Render(fmt.Sprintf("%s%s%s %s", prefix, indent, indicator, name))
+					// Non-selected: use individually-styled status indicator
+					var indicator string
+					switch file.Status {
+					case workspace.StatusCompleted:
+						indicator = f.theme.StatusDone.Render(indicatorChar)
+					case workspace.StatusInProgress:
+						indicator = f.theme.StatusProgress.Render(indicatorChar)
+					default:
+						indicator = f.theme.StatusPending.Render(indicatorChar)
+					}
+					if file.Status == workspace.StatusCompleted {
+						line = f.theme.Dimmed.PaddingLeft(1).Render(fmt.Sprintf(" %s%s %s", indent, indicator, name))
+					} else {
+						line = f.theme.SidebarItem.Render(fmt.Sprintf(" %s%s %s", indent, indicator, name))
+					}
 				}
 
 				b.WriteString(line)

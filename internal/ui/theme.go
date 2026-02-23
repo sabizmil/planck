@@ -66,11 +66,12 @@ func DefaultTheme() *Theme {
 	// Colors from spec
 	primary := lipgloss.Color("#E0E0E0")
 	secondary := lipgloss.Color("#A0A0A0")
-	accent := lipgloss.Color("#06B6D4")   // Teal/cyan
-	success := lipgloss.Color("#22C55E")  // Green
-	warning := lipgloss.Color("#F59E0B")  // Amber
-	errorC := lipgloss.Color("#EF4444")   // Red
-	dimmed := lipgloss.Color("#6B7280")   // Gray
+	accent := lipgloss.Color("#06B6D4")    // Teal/cyan
+	success := lipgloss.Color("#22C55E")   // Green
+	warning := lipgloss.Color("#F59E0B")   // Amber
+	errorC := lipgloss.Color("#EF4444")    // Red
+	dimmed := lipgloss.Color("#6B7280")    // Gray
+	selectedBg := lipgloss.Color("#1E3A5F") // Subtle dark blue for selection highlight
 
 	return &Theme{
 		Primary:   primary,
@@ -95,7 +96,8 @@ func DefaultTheme() *Theme {
 
 		Selected: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(accent),
+			Foreground(accent).
+			Background(selectedBg),
 
 		StatusDone: lipgloss.NewStyle().
 			Foreground(success),
@@ -134,6 +136,7 @@ func DefaultTheme() *Theme {
 		SidebarSelected: lipgloss.NewStyle().
 			Foreground(accent).
 			Bold(true).
+			Background(selectedBg).
 			PaddingLeft(1),
 
 		PlanTree: lipgloss.NewStyle().
@@ -145,7 +148,8 @@ func DefaultTheme() *Theme {
 
 		TreeSelected: lipgloss.NewStyle().
 			Foreground(accent).
-			Bold(true),
+			Bold(true).
+			Background(selectedBg),
 
 		DetailPanel: lipgloss.NewStyle().
 			PaddingLeft(2).
@@ -208,7 +212,7 @@ func noColorTheme() *Theme {
 		Subtitle:        lipgloss.NewStyle(),
 		Normal:          lipgloss.NewStyle(),
 		Dimmed:          lipgloss.NewStyle(),
-		Selected:        lipgloss.NewStyle().Bold(true),
+		Selected:        lipgloss.NewStyle().Bold(true).Reverse(true),
 		StatusDone:      lipgloss.NewStyle(),
 		StatusProgress:  lipgloss.NewStyle(),
 		StatusPending:   lipgloss.NewStyle(),
@@ -219,10 +223,10 @@ func noColorTheme() *Theme {
 		Border:          lipgloss.NewStyle(),
 		Sidebar:         lipgloss.NewStyle().Width(16),
 		SidebarItem:     lipgloss.NewStyle().PaddingLeft(1),
-		SidebarSelected: lipgloss.NewStyle().Bold(true).PaddingLeft(1),
+		SidebarSelected: lipgloss.NewStyle().Bold(true).Reverse(true).PaddingLeft(1),
 		PlanTree:        lipgloss.NewStyle().PaddingLeft(1),
 		TreeItem:        lipgloss.NewStyle(),
-		TreeSelected:    lipgloss.NewStyle().Bold(true),
+		TreeSelected:    lipgloss.NewStyle().Bold(true).Reverse(true),
 		DetailPanel:     lipgloss.NewStyle().PaddingLeft(2),
 		StatusBar:       lipgloss.NewStyle(),
 		Dialog:          lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2),

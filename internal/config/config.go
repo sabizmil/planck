@@ -37,6 +37,7 @@ type Preferences struct {
 	Editor       string `toml:"editor"`
 	TmuxPrefix   string `toml:"tmux_prefix"`
 	SpinnerStyle string `toml:"spinner_style"`
+	SidebarWidth int    `toml:"sidebar_width"`
 }
 
 // MarkdownStyle configures the markdown rendering style
@@ -92,6 +93,7 @@ func DefaultConfig() *Config {
 			Editor:       "",
 			TmuxPrefix:   "planck",
 			SpinnerStyle: "claude",
+			SidebarWidth: 28,
 		},
 		Notifications: Notifications{
 			Bell: true,
