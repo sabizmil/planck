@@ -13,7 +13,7 @@ func TestStatusValues(t *testing.T) {
 		{StatusPaused, "paused"},
 		{StatusCompleted, "completed"},
 		{StatusFailed, "failed"},
-		{StatusCancelled, "cancelled"},
+		{StatusCanceled, "canceled"},
 	}
 
 	for _, tt := range tests {

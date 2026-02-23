@@ -26,11 +26,11 @@ type Editor struct {
 	styleJSON []byte
 
 	// Content
-	fileName    string
-	content     string
-	lines       []string
-	rendered    string
-	lineCount   int
+	fileName  string
+	content   string
+	lines     []string
+	rendered  string
+	lineCount int
 
 	// Mode
 	mode EditorMode
@@ -44,8 +44,8 @@ type Editor struct {
 	modified  bool
 
 	// Dimensions
-	width  int
-	height int
+	width   int
+	height  int
 	focused bool
 
 	// Screen position (for mouse coordinate translation)

@@ -66,8 +66,7 @@ func (d *Dialog) Update(msg tea.Msg) (*Dialog, tea.Cmd) {
 		return d, nil
 	}
 
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch d.dtype {
 		case DialogConfirm:
 			switch msg.String() {
@@ -84,7 +83,7 @@ func (d *Dialog) Update(msg tea.Msg) (*Dialog, tea.Cmd) {
 			case "esc":
 				d.close(DialogResult{Confirmed: false})
 			case "backspace":
-				if len(d.input) > 0 {
+				if d.input != "" {
 					d.input = d.input[:len(d.input)-1]
 				}
 			default:
@@ -199,12 +198,7 @@ func (d *Dialog) View() string {
 }
 
 func (d *Dialog) dialogWidth() int {
-	minWidth := 40
-	maxWidth := d.width - 10
-	if maxWidth < minWidth {
-		maxWidth = minWidth
-	}
-	return minWidth
+	return 40
 }
 
 func (d *Dialog) centerDialog(content string) string {

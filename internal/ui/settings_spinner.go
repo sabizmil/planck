@@ -152,13 +152,14 @@ func (p *spinnerPage) renderList(listWidth, height int) string {
 			name += " \u2713"
 		}
 
-		if isSelected {
+		switch {
+		case isSelected:
 			sb.WriteString(p.theme.Selected.Render(fmt.Sprintf(" \u25B8 %s", name)))
-		} else if isActive {
+		case isActive:
 			sb.WriteString(lipgloss.NewStyle().
 				Foreground(p.theme.Success).
 				Render(fmt.Sprintf("   %s", name)))
-		} else {
+		default:
 			sb.WriteString(p.theme.Normal.Render(fmt.Sprintf("   %s", name)))
 		}
 		sb.WriteString("\n")
@@ -189,7 +190,7 @@ func (p *spinnerPage) renderList(listWidth, height int) string {
 		Render(sb.String())
 }
 
-func (p *spinnerPage) renderPreview(previewWidth, height int) string {
+func (p *spinnerPage) renderPreview(previewWidth, _ int) string {
 	if previewWidth < 10 {
 		return ""
 	}

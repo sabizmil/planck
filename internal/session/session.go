@@ -14,7 +14,7 @@ const (
 	StatusPaused    Status = "paused"
 	StatusCompleted Status = "completed"
 	StatusFailed    Status = "failed"
-	StatusCancelled Status = "cancelled"
+	StatusCanceled  Status = "canceled"
 )
 
 // Mode represents session mode

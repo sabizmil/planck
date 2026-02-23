@@ -39,7 +39,6 @@ type agentsPage struct {
 	// Navigation
 	focus       agentsFocus
 	listIdx     int
-	detailIdx   int
 	detailField agentDetailField
 
 	// Text editing state
@@ -114,7 +113,7 @@ func (p *agentsPage) Update(msg tea.KeyMsg) tea.Cmd {
 
 	if p.editing {
 		return p.handleEditKey(key, msg)
-		}
+	}
 
 	if p.focus == agentsFocusList {
 		return p.handleListKey(key)
@@ -141,7 +140,7 @@ func (p *agentsPage) handleListKey(key string) tea.Cmd {
 	return nil
 }
 
-func (p *agentsPage) handleDetailKey(key string, msg tea.KeyMsg) tea.Cmd {
+func (p *agentsPage) handleDetailKey(key string, _ tea.KeyMsg) tea.Cmd {
 	switch key {
 	case "j", "down":
 		if p.detailField < agentDetailFieldCount-1 {
@@ -291,11 +290,12 @@ func (p *agentsPage) renderList(listWidth, height int) string {
 		}
 
 		isSelected := i == p.listIdx
-		if isSelected && p.focus == agentsFocusList {
+		switch {
+		case isSelected && p.focus == agentsFocusList:
 			sb.WriteString(p.theme.Selected.Render(fmt.Sprintf(" \u25B8 %s %s", key, indicator)))
-		} else if isSelected {
+		case isSelected:
 			sb.WriteString(p.theme.Normal.Render(fmt.Sprintf(" \u25B8 %s %s", key, indicator)))
-		} else {
+		default:
 			sb.WriteString(p.theme.Normal.Render(fmt.Sprintf("   %s %s", key, indicator)))
 		}
 		sb.WriteString("\n")
@@ -353,7 +353,8 @@ func (p *agentsPage) renderDetail(detailWidth, height int) string {
 
 		isSelected := p.focus == agentsFocusDetail && p.detailField == row.field
 
-		if p.editing && isSelected {
+		switch {
+		case p.editing && isSelected:
 			before := p.editValue[:p.editCur]
 			after := p.editValue[p.editCur:]
 			cursor := p.theme.Selected.Reverse(true).Render(" ")
@@ -363,13 +364,13 @@ func (p *agentsPage) renderDetail(detailWidth, height int) string {
 			}
 			line := "  " + p.theme.Normal.Render(before) + cursor + p.theme.Normal.Render(after)
 			sb.WriteString(line)
-		} else if isSelected {
+		case isSelected:
 			display := row.value
 			if display == "" {
 				display = "(empty)"
 			}
 			sb.WriteString(p.theme.Selected.Render(fmt.Sprintf(" \u25B8 %s", display)))
-		} else {
+		default:
 			display := row.value
 			if display == "" {
 				display = "(empty)"

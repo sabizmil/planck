@@ -19,9 +19,9 @@ import (
 type PTYSession struct {
 	id         string
 	taskID     string
-	master     *os.File      // PTY master fd (read/write)
-	cmd        *exec.Cmd     // Child process
-	terminal   *vt.Emulator  // Virtual terminal state
+	master     *os.File     // PTY master fd (read/write)
+	cmd        *exec.Cmd    // Child process
+	terminal   *vt.Emulator // Virtual terminal state
 	scrollback *ScrollbackBuffer
 	mu         sync.Mutex
 	done       chan struct{}
@@ -33,13 +33,13 @@ type PTYSession struct {
 
 // PTYBackend implements Backend using in-process PTY
 type PTYBackend struct {
-	prefix         string
-	sessionsDir    string
-	escapeKey      string
+	prefix          string
+	sessionsDir     string
+	escapeKey       string
 	scrollbackLines int
-	extraArgs      []string
-	mu             sync.Mutex
-	sessions       map[string]*PTYSession
+	extraArgs       []string
+	mu              sync.Mutex
+	sessions        map[string]*PTYSession
 }
 
 // NewPTYBackend creates a new PTY backend
@@ -73,7 +73,7 @@ func IsCommandAvailable(command string) bool {
 // Launch starts a new PTY session using the default "claude" command.
 // If prompt is empty, launches an interactive Claude session without a system prompt.
 // taskID is used as the working directory for the session.
-func (p *PTYBackend) Launch(ctx context.Context, taskID string, prompt string) (*Session, error) {
+func (p *PTYBackend) Launch(ctx context.Context, taskID, prompt string) (*Session, error) {
 	args := append([]string{}, p.extraArgs...)
 	return p.LaunchCommand(ctx, taskID, "claude", args, prompt)
 }
@@ -85,7 +85,7 @@ func (p *PTYBackend) LaunchCommand(ctx context.Context, workDir, command string,
 	id := uuid.New().String()
 
 	// Ensure sessions directory exists
-	if err := os.MkdirAll(p.sessionsDir, 0755); err != nil {
+	if err := os.MkdirAll(p.sessionsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create sessions dir: %w", err)
 	}
 
@@ -95,7 +95,7 @@ func (p *PTYBackend) LaunchCommand(ctx context.Context, workDir, command string,
 	if prompt != "" {
 		// Write prompt to temp file
 		promptFile = filepath.Join(p.sessionsDir, fmt.Sprintf("%s-prompt.md", id))
-		if err := os.WriteFile(promptFile, []byte(prompt), 0600); err != nil {
+		if err := os.WriteFile(promptFile, []byte(prompt), 0o600); err != nil {
 			return nil, fmt.Errorf("write prompt file: %w", err)
 		}
 		cmdArgs = append(cmdArgs, "--system-prompt-file", promptFile)
@@ -118,10 +118,8 @@ func (p *PTYBackend) LaunchCommand(ctx context.Context, workDir, command string,
 		return nil, fmt.Errorf("start PTY: %w", err)
 	}
 
-	// Set initial size
-	if err := pty.Setsize(master, &pty.Winsize{Rows: 24, Cols: 80}); err != nil {
-		// Non-fatal, continue
-	}
+	// Set initial size (non-fatal if it fails)
+	_ = pty.Setsize(master, &pty.Winsize{Rows: 24, Cols: 80})
 
 	// Create virtual terminal emulator (default 80x24)
 	terminal := vt.NewEmulator(80, 24)
@@ -182,7 +180,7 @@ func (s *PTYSession) readLoop() {
 		n, err := s.master.Read(buf)
 		if n > 0 {
 			s.mu.Lock()
-			s.terminal.Write(buf[:n])
+			_, _ = s.terminal.Write(buf[:n])
 			s.mu.Unlock()
 		}
 		if err != nil {
@@ -297,7 +295,7 @@ func (p *PTYBackend) Kill(handle string) error {
 
 	// Send SIGTERM, then SIGKILL after timeout
 	if sess.cmd.Process != nil {
-		sess.cmd.Process.Signal(syscall.SIGTERM)
+		_ = sess.cmd.Process.Signal(syscall.SIGTERM)
 	}
 
 	select {
@@ -306,7 +304,7 @@ func (p *PTYBackend) Kill(handle string) error {
 	case <-time.After(5 * time.Second):
 		// Force kill
 		if sess.cmd.Process != nil {
-			sess.cmd.Process.Kill()
+			_ = sess.cmd.Process.Kill()
 		}
 	}
 
@@ -352,7 +350,8 @@ func (p *PTYBackend) List() ([]*Session, error) {
 func (p *PTYBackend) Status(handle string) (Status, error) {
 	sess := p.getSession(handle)
 	if sess == nil {
-		return StatusCompleted, nil // gone = completed
+		// Session not found means it already finished
+		return StatusCompleted, nil
 	}
 
 	sess.mu.Lock()
@@ -384,7 +383,7 @@ func (p *PTYBackend) Resize(handle string, rows, cols uint16) error {
 
 	// Signal child process
 	if sess.cmd.Process != nil {
-		sess.cmd.Process.Signal(syscall.SIGWINCH)
+		_ = sess.cmd.Process.Signal(syscall.SIGWINCH)
 	}
 
 	return nil

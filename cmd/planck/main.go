@@ -101,9 +101,7 @@ func main() {
 
 	// Save to recent folders
 	recent.Add(folder)
-	if err := recent.Save(configDir); err != nil {
-		// Non-fatal, continue
-	}
+	_ = recent.Save(configDir) // Non-fatal, continue
 
 	// Load or create configuration
 	cfg, err := config.Load(folder)
@@ -156,7 +154,10 @@ func runFolderPicker(recentFolders []string) (string, error) {
 		return "", err
 	}
 
-	result := model.(*app.FolderPickerModel)
+	result, ok := model.(*app.FolderPickerModel)
+	if !ok {
+		return "", fmt.Errorf("unexpected model type")
+	}
 	if result.Quit {
 		return "", fmt.Errorf("quit")
 	}

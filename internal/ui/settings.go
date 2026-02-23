@@ -242,8 +242,8 @@ func (s *Settings) View() string {
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(s.theme.Accent).
-		Width(s.width - 2).
-		Height(s.height - 2).
+		Width(s.width-2).
+		Height(s.height-2).
 		Padding(0, 1)
 
 	return boxStyle.Render(b.String())
@@ -260,11 +260,12 @@ func (s *Settings) renderSidebar() string {
 
 	for i, cat := range s.categories {
 		var line string
-		if i == s.sidebarIdx && s.focus == focusSidebar {
+		switch {
+		case i == s.sidebarIdx && s.focus == focusSidebar:
 			line = s.theme.Selected.Render(fmt.Sprintf(" \u25B8 %s", cat.Name))
-		} else if i == s.sidebarIdx {
+		case i == s.sidebarIdx:
 			line = s.theme.Normal.Render(fmt.Sprintf(" \u25B8 %s", cat.Name))
-		} else {
+		default:
 			line = s.theme.Normal.Render(fmt.Sprintf("   %s", cat.Name))
 		}
 		sb.WriteString(line)

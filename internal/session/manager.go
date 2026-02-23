@@ -60,7 +60,7 @@ func (m *Manager) Launch(ctx context.Context, filePath, prompt string) (*Session
 		StartedAt: session.StartedAt,
 	}
 	if err := m.store.SaveSession(dbSession); err != nil {
-		// Log error but don't fail
+		_ = err // best-effort persistence; don't fail the launch
 	}
 
 	return session, nil
@@ -123,7 +123,7 @@ func (m *Manager) Kill(sessionID string) error {
 	}
 
 	// Update database
-	return m.store.UpdateSessionStatus(sessionID, string(StatusCancelled), nil)
+	return m.store.UpdateSessionStatus(sessionID, string(StatusCanceled), nil)
 }
 
 // Get returns a session by ID
@@ -151,7 +151,7 @@ func (m *Manager) UpdateStatus(sessionID string, status Status) error {
 	session, exists := m.sessions[sessionID]
 	if exists {
 		session.Status = status
-		if status == StatusCompleted || status == StatusFailed || status == StatusCancelled {
+		if status == StatusCompleted || status == StatusFailed || status == StatusCanceled {
 			now := time.Now()
 			session.EndedAt = &now
 		}

@@ -61,7 +61,8 @@ func (t *TabBar) Update(msg tea.Msg) (*TabBar, tea.Cmd) {
 	if _, ok := msg.(SpinnerTickMsg); ok {
 		t.spinnerFrame = (t.spinnerFrame + 1) % len(t.spinnerFrames)
 		if t.HasRunningTabs() {
-			return t, t.Tick()
+			cmd := t.Tick()
+			return t, cmd
 		}
 	}
 	return t, nil
@@ -100,11 +101,12 @@ func (t *TabBar) View() string {
 
 		label := tab.Label
 		// Add status indicator for agent tabs (always left-aligned before label)
-		if tab.Status == "needs_input" && i > 0 {
+		switch {
+		case tab.Status == "needs_input" && i > 0:
 			label = IndicatorActive + " " + label
-		} else if (tab.Status == "completed" || tab.Status == "idle") && i > 0 {
+		case (tab.Status == "completed" || tab.Status == "idle") && i > 0:
 			label = IndicatorDone + " " + label
-		} else if tab.Status == "running" && i > 0 {
+		case tab.Status == "running" && i > 0:
 			label = t.spinnerFrames[t.spinnerFrame%len(t.spinnerFrames)] + " " + label
 		}
 
@@ -113,13 +115,14 @@ func (t *TabBar) View() string {
 
 		// Determine foreground color from tab state
 		var fg lipgloss.Color
-		if tab.Status == "needs_input" && i > 0 {
+		switch {
+		case tab.Status == "needs_input" && i > 0:
 			fg = t.theme.Error
-		} else if (tab.Status == "completed" || tab.Status == "idle") && i > 0 {
+		case (tab.Status == "completed" || tab.Status == "idle") && i > 0:
 			fg = t.theme.Success
-		} else if tab.Status == "running" && i > 0 {
+		case tab.Status == "running" && i > 0:
 			fg = t.theme.Accent
-		} else {
+		default:
 			fg = t.theme.Secondary
 		}
 

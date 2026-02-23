@@ -202,11 +202,12 @@ func (w *Workspace) parseFile(f *File) {
 
 	// Derive status from checkboxes if not set in frontmatter
 	if f.Status == "" {
-		if hasUnchecked {
+		switch {
+		case hasUnchecked:
 			f.Status = StatusPending
-		} else if hasChecked {
+		case hasChecked:
 			f.Status = StatusCompleted
-		} else {
+		default:
 			f.Status = StatusPending
 		}
 	}
@@ -256,7 +257,7 @@ func (w *Workspace) SaveFile(name, content string) error {
 		path += ".md"
 	}
 
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write file: %w", err)
 	}
 
@@ -279,7 +280,7 @@ func (w *Workspace) CreateFile(name string) error {
 
 	// Create with basic template
 	content := fmt.Sprintf("# %s\n\n", strings.TrimSuffix(name, ".md"))
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
 
@@ -307,7 +308,7 @@ func (w *Workspace) ToggleFileStatus(name string) error {
 
 	updated := setFrontmatterStatus(string(content), newStatus)
 
-	if err := os.WriteFile(f.Path, []byte(updated), 0644); err != nil {
+	if err := os.WriteFile(f.Path, []byte(updated), 0o644); err != nil {
 		return fmt.Errorf("write file: %w", err)
 	}
 
@@ -413,7 +414,7 @@ func (w *Workspace) Watch() (<-chan struct{}, error) {
 				if strings.HasSuffix(strings.ToLower(event.Name), ".md") ||
 					event.Has(fsnotify.Create) || event.Has(fsnotify.Remove) {
 					// Refresh file list
-					w.Refresh()
+					_ = w.Refresh()
 
 					// Non-blocking send
 					select {
@@ -481,7 +482,7 @@ func LoadRecentFolders(configDir string) (*RecentFolders, error) {
 
 // Save saves the recent folders to config
 func (r *RecentFolders) Save(configDir string) error {
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		return err
 	}
 
@@ -490,11 +491,11 @@ func (r *RecentFolders) Save(configDir string) error {
 	// Simple JSON encoding
 	var parts []string
 	for _, f := range r.Folders {
-		parts = append(parts, fmt.Sprintf(`"%s"`, f))
+		parts = append(parts, fmt.Sprintf("%q", f))
 	}
 	content := fmt.Sprintf(`{"folders":[%s]}`, strings.Join(parts, ","))
 
-	return os.WriteFile(path, []byte(content), 0644)
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 // Add adds a folder to the recent list

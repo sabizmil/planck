@@ -326,14 +326,10 @@ func (p *markdownPage) cycleForward() {
 			}
 		}
 		next := themes[(idx+1)%len(themes)]
-		if next == p.styleConfig.GlobalTheme && hasOverride {
+		switch {
+		case next == p.styleConfig.GlobalTheme && hasOverride:
 			delete(p.styleConfig.Overrides, elem)
-		} else if next != p.styleConfig.GlobalTheme {
-			if p.styleConfig.Overrides == nil {
-				p.styleConfig.Overrides = map[ElementType]ThemeName{}
-			}
-			p.styleConfig.Overrides[elem] = next
-		} else {
+		default:
 			if p.styleConfig.Overrides == nil {
 				p.styleConfig.Overrides = map[ElementType]ThemeName{}
 			}

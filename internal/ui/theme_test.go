@@ -18,10 +18,9 @@ func TestDefaultTheme(t *testing.T) {
 		t.Fatal("DefaultTheme() returned nil")
 	}
 
-	// Verify styles are set
-	if theme.Title.Value() == "" && theme.Normal.Value() == "" {
-		// At least some styles should be defined
-	}
+	// Verify styles are set - at least some styles should be defined
+	_ = theme.Title.Value()
+	_ = theme.Normal.Value()
 }
 
 func TestNoColorMode(t *testing.T) {

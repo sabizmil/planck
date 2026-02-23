@@ -41,9 +41,9 @@ type Notifier interface {
 
 // BellNotifier implements Notifier using terminal bell
 type BellNotifier struct {
-	enabled bool
-	mu      sync.Mutex
-	history []Event
+	enabled    bool
+	mu         sync.Mutex
+	history    []Event
 	maxHistory int
 }
 

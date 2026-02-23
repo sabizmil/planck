@@ -22,13 +22,13 @@ func padToWidth(s string, width int) string {
 
 // treeNode represents a node in the file tree (either a directory or a file)
 type treeNode struct {
-	name     string           // Display name (just segment: "task.md" or "subdir")
-	path     string           // Relative path ("subdir/task.md" or "subdir")
-	depth    int              // Nesting level (0 = root)
-	isDir    bool             // Directory or file
-	expanded bool             // For dirs: expanded state
-	file     *workspace.File  // For files only (nil for dirs)
-	children []*treeNode      // Children (for dirs)
+	name     string          // Display name (just segment: "task.md" or "subdir")
+	path     string          // Relative path ("subdir/task.md" or "subdir")
+	depth    int             // Nesting level (0 = root)
+	isDir    bool            // Directory or file
+	expanded bool            // For dirs: expanded state
+	file     *workspace.File // For files only (nil for dirs)
+	children []*treeNode     // Children (for dirs)
 }
 
 // FileList displays a list of markdown files as a collapsible tree
@@ -61,8 +61,7 @@ func (f *FileList) Init() tea.Cmd {
 
 // Update handles messages
 func (f *FileList) Update(msg tea.Msg) (*FileList, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		if !f.focused {
 			return f, nil
 		}

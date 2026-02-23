@@ -90,7 +90,7 @@ func (c *ClaudeAgent) Stream(ctx context.Context, prompt string) (<-chan StreamE
 
 	go func() {
 		defer close(events)
-		defer c.cmd.Wait()
+		defer func() { _ = c.cmd.Wait() }()
 
 		// Read stderr in background
 		go func() {
@@ -126,11 +126,6 @@ func (c *ClaudeAgent) Stream(ctx context.Context, prompt string) (<-chan StreamE
 			}
 
 			events <- event
-
-			// Extract session ID if present
-			if event.Type == EventText {
-				// Look for session ID in metadata
-			}
 		}
 
 		if err := scanner.Err(); err != nil {

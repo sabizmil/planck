@@ -261,8 +261,7 @@ func (p *generalPage) cycleField(dir int) {
 }
 
 func (p *generalPage) adjustNumberField(dir int) {
-	switch p.selectedIdx {
-	case 2: // Sidebar Width
+	if p.selectedIdx == 2 { // Sidebar Width
 		p.sidebarWidth += dir * 2
 		if p.sidebarWidth < 16 {
 			p.sidebarWidth = 16
@@ -336,7 +335,8 @@ func (p *generalPage) renderFields(optionsWidth, height int) string {
 		value := p.getFieldValue(i)
 		isSelected := i == p.selectedIdx
 
-		if p.editing && isSelected {
+		switch {
+		case p.editing && isSelected:
 			// Show text input
 			before := p.editValue[:p.editCur]
 			after := p.editValue[p.editCur:]
@@ -347,7 +347,7 @@ func (p *generalPage) renderFields(optionsWidth, height int) string {
 			}
 			line := "  " + p.theme.Normal.Render(before) + cursor + p.theme.Normal.Render(after)
 			sb.WriteString(line)
-		} else if isSelected {
+		case isSelected:
 			switch field.Kind {
 			case "cycle", "number":
 				sb.WriteString(p.theme.Selected.Render(fmt.Sprintf(" \u25C0 %s \u25B6", value)))
@@ -361,7 +361,7 @@ func (p *generalPage) renderFields(optionsWidth, height int) string {
 				}
 				sb.WriteString(p.theme.Selected.Render(fmt.Sprintf(" \u25B8 %s", display)))
 			}
-		} else {
+		default:
 			switch field.Kind {
 			case "toggle":
 				indicator := "\u25CF"
@@ -395,7 +395,7 @@ func (p *generalPage) renderFields(optionsWidth, height int) string {
 		Render(sb.String())
 }
 
-func (p *generalPage) renderInfo(infoWidth, height int) string {
+func (p *generalPage) renderInfo(infoWidth, _ int) string {
 	if infoWidth < 10 {
 		return ""
 	}

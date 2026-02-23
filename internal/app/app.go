@@ -422,7 +422,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// chain breaks and the tab goes permanently silent.
 	if msg, ok := msg.(ui.PTYWriteMsg); ok {
 		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
-			a.sessionBackend.Write(tab.session.BackendHandle, msg.Data)
+			_ = a.sessionBackend.Write(tab.session.BackendHandle, msg.Data)
 			tab.lastUserWrite = time.Now()
 
 			// Accumulate user keystrokes to derive a tab title.
@@ -565,15 +565,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Folder picker overlay takes priority
 	if a.folderPickerVisible {
-		if _, ok := msg.(ui.FolderSelectedMsg); ok {
+		if fsm, ok := msg.(ui.FolderSelectedMsg); ok {
 			a.folderPickerVisible = false
-			cmd := a.switchFolder(msg.(ui.FolderSelectedMsg).Folder)
+			cmd := a.switchFolder(fsm.Folder)
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 			return a, tea.Batch(cmds...)
 		}
-		if _, ok := msg.(ui.FolderPickerCancelledMsg); ok {
+		if _, ok := msg.(ui.FolderPickerCanceledMsg); ok {
 			a.folderPickerVisible = false
 			return a, tea.Batch(cmds...)
 		}
@@ -588,10 +588,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle mouse events on planning tab (and drag release anywhere)
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
 		if a.isOnPlanningTab() || a.draggingSidebar {
-			cmd := a.handlePlanningMouse(mouseMsg)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+			a.handlePlanningMouse(mouseMsg)
 			return a, tea.Batch(cmds...)
 		}
 	}
@@ -927,7 +924,7 @@ func (a *App) launchAgentTab(agentKey string) tea.Cmd {
 
 	// Resize the PTY to match panel dimensions
 	rows, cols := tab.panel.TerminalSize()
-	a.sessionBackend.Resize(sess.BackendHandle, uint16(rows), uint16(cols))
+	_ = a.sessionBackend.Resize(sess.BackendHandle, uint16(rows), uint16(cols))
 
 	// Wire scrollback buffer from backend to panel
 	if sb := a.sessionBackend.GetScrollback(sess.BackendHandle); sb != nil {
@@ -1217,14 +1214,13 @@ func (a *App) killAllSessions() {
 	}
 }
 
-func (a *App) handlePlanningTabKey(key string, msg tea.KeyMsg) tea.Cmd {
+func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 	// Skip if in edit mode - let editor handle
 	if a.editor.Mode() == ui.EditorModeEdit {
 		return nil
 	}
 
-	switch a.focus {
-	case FocusFileList:
+	if a.focus == FocusFileList {
 		switch key {
 		case "enter":
 			// Load selected file (no-op on directories)
@@ -1316,13 +1312,13 @@ func (a *App) handlePlanningTabKey(key string, msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (a *App) handlePlanningMouse(msg tea.MouseMsg) tea.Cmd {
+func (a *App) handlePlanningMouse(msg tea.MouseMsg) {
 	me := tea.MouseEvent(msg)
 
 	// Wheel events: forward to editor regardless of focus
 	if me.IsWheel() {
 		a.editor.Update(msg)
-		return nil
+		return
 	}
 
 	borderCol := a.sidebarWidth // the border sits at this column
@@ -1331,7 +1327,7 @@ func (a *App) handlePlanningMouse(msg tea.MouseMsg) tea.Cmd {
 	if msg.Button == tea.MouseButtonLeft && me.Action == tea.MouseActionPress {
 		if msg.X >= borderCol-1 && msg.X <= borderCol+1 {
 			a.draggingSidebar = true
-			return nil
+			return
 		}
 	}
 
@@ -1356,14 +1352,14 @@ func (a *App) handlePlanningMouse(msg tea.MouseMsg) tea.Cmd {
 				a.sidebarWidth = newWidth
 				a.updateSizes()
 			}
-			return nil
+			return
 		}
 		// End drag: mouse release — persist width to config
 		if me.Action == tea.MouseActionRelease {
 			a.draggingSidebar = false
 			a.config.Preferences.SidebarWidth = a.sidebarWidth
 			_ = a.config.Save()
-			return nil
+			return
 		}
 	}
 
@@ -1376,10 +1372,7 @@ func (a *App) handlePlanningMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 		a.editor.Update(msg)
 		a.prevCursor = a.fileList.Cursor()
-		return nil
 	}
-
-	return nil
 }
 
 func (a *App) updateFocus() {
@@ -1496,14 +1489,15 @@ func (a *App) View() string {
 func (a *App) renderStatusBar() string {
 	// Build status bar content
 	var leftContent string
-	if !a.ctrlCPressedAt.IsZero() && time.Since(a.ctrlCPressedAt) < 2*time.Second {
+	switch {
+	case !a.ctrlCPressedAt.IsZero() && time.Since(a.ctrlCPressedAt) < 2*time.Second:
 		leftContent = a.theme.StatusFailed.Render("Press Ctrl+C again to quit")
-	} else if a.message != "" {
+	case a.message != "":
 		leftContent = a.theme.Normal.Render(a.message)
 		a.message = "" // Clear after showing
-	} else if a.folderPickerVisible {
+	case a.folderPickerVisible:
 		leftContent = a.theme.KeyHint.Render("[^|v] navigate  [Enter] select  [b] browse  [Esc] cancel")
-	} else {
+	default:
 		// Show context hints
 		if a.isOnPlanningTab() {
 			if a.editor.Mode() == ui.EditorModeEdit {
@@ -1568,7 +1562,7 @@ func (a *App) updateSizes() {
 		tab.panel.SetSize(a.width, contentHeight)
 		if tab.session != nil {
 			rows, cols := tab.panel.TerminalSize()
-			a.sessionBackend.Resize(tab.session.BackendHandle, uint16(rows), uint16(cols))
+			_ = a.sessionBackend.Resize(tab.session.BackendHandle, uint16(rows), uint16(cols))
 		}
 	}
 }
@@ -1732,7 +1726,7 @@ func hookSettingsJSON(stateFile string) string {
 	// shows a permission prompt. The command is a simple shell one-liner
 	// so it runs instantly with no dependencies.
 	cmd := fmt.Sprintf("echo needs_input > %s", stateFile)
-	return fmt.Sprintf(`{"hooks":{"Notification":[{"matcher":"permission_prompt","hooks":[{"type":"command","command":"%s"}]}]}}`, cmd)
+	return fmt.Sprintf(`{"hooks":{"Notification":[{"matcher":"permission_prompt","hooks":[{"type":"command","command":%q}]}]}}`, cmd)
 }
 
 // readHookState reads the hook state file for a tab. Returns the state string

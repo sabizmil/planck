@@ -18,19 +18,19 @@ type Store struct {
 
 // Session represents a session record in the database
 type Session struct {
-	ID            string
-	FilePath      string
-	Status        string // running | completed | failed | cancelled
-	StartedAt     time.Time
-	EndedAt       *time.Time
-	ExitCode      *int
+	ID        string
+	FilePath  string
+	Status    string // running | completed | failed | canceled
+	StartedAt time.Time
+	EndedAt   *time.Time
+	ExitCode  *int
 }
 
 // Open opens or creates the store database
 func Open(path string) (*Store, error) {
 	// Ensure directory exists
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create store directory: %w", err)
 	}
 
@@ -209,7 +209,7 @@ func (s *Store) ListActiveSessions() ([]*Session, error) {
 // UpdateSessionStatus updates a session's status
 func (s *Store) UpdateSessionStatus(id, status string, exitCode *int) error {
 	var endedAt interface{}
-	if status == "completed" || status == "failed" || status == "cancelled" {
+	if status == "completed" || status == "failed" || status == "canceled" {
 		endedAt = time.Now()
 	}
 	_, err := s.db.Exec(`

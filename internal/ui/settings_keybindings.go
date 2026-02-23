@@ -91,7 +91,7 @@ type keybindingsPage struct {
 	theme *Theme
 
 	// Navigation
-	contextIdx int
+	contextIdx   int
 	scrollOffset int
 }
 

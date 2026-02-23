@@ -126,7 +126,7 @@ func Load(workDir string) (*Config, error) {
 	cfg.ConfigPath = configPath
 
 	// Create config directory if it doesn't exist
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create config directory: %w", err)
 	}
 

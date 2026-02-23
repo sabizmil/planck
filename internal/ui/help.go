@@ -34,8 +34,7 @@ func (h *Help) Update(msg tea.Msg) (*Help, tea.Cmd) {
 		return h, nil
 	}
 
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "?", "esc", "q":
 			h.visible = false

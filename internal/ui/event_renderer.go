@@ -65,7 +65,7 @@ func RenderEventHistory(theme *Theme, events []agent.StreamEvent, width int, col
 	return sb.String()
 }
 
-func renderTextEvent(theme *Theme, event agent.StreamEvent, width int) string {
+func renderTextEvent(_ *Theme, event agent.StreamEvent, width int) string {
 	if event.Text == "" {
 		return ""
 	}
@@ -175,7 +175,7 @@ func renderPermissionEvent(theme *Theme, event agent.StreamEvent, width int) str
 	return theme.PermissionCard.Width(width).Render(content.String())
 }
 
-func renderErrorEvent(theme *Theme, event agent.StreamEvent, width int) string {
+func renderErrorEvent(theme *Theme, event agent.StreamEvent, _ int) string {
 	errMsg := "Unknown error"
 	if event.Error != nil {
 		errMsg = event.Error.Error()

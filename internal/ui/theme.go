@@ -66,11 +66,11 @@ func DefaultTheme() *Theme {
 	// Colors from spec
 	primary := lipgloss.Color("#E0E0E0")
 	secondary := lipgloss.Color("#A0A0A0")
-	accent := lipgloss.Color("#06B6D4")    // Teal/cyan
-	success := lipgloss.Color("#22C55E")   // Green
-	warning := lipgloss.Color("#F59E0B")   // Amber
-	errorC := lipgloss.Color("#EF4444")    // Red
-	dimmed := lipgloss.Color("#6B7280")    // Gray
+	accent := lipgloss.Color("#06B6D4")     // Teal/cyan
+	success := lipgloss.Color("#22C55E")    // Green
+	warning := lipgloss.Color("#F59E0B")    // Amber
+	errorC := lipgloss.Color("#EF4444")     // Red
+	dimmed := lipgloss.Color("#6B7280")     // Gray
 	selectedBg := lipgloss.Color("#1E3A5F") // Subtle dark blue for selection highlight
 
 	return &Theme{
@@ -243,16 +243,16 @@ func noColorTheme() *Theme {
 
 // Status indicators
 const (
-	IndicatorDone       = "✓"
-	IndicatorInProgress = "◉"
-	IndicatorPending    = "○"
-	IndicatorBlocked    = "⊘"
-	IndicatorFailed     = "✗"
-	IndicatorSkipped    = "—"
-	IndicatorActive     = "●"
-	IndicatorBackground = "◐"
-	IndicatorExecuting  = "▶"
-	IndicatorPaused     = "⏸"
+	IndicatorDone         = "✓"
+	IndicatorInProgress   = "◉"
+	IndicatorPending      = "○"
+	IndicatorBlocked      = "⊘"
+	IndicatorFailed       = "✗"
+	IndicatorSkipped      = "—"
+	IndicatorActive       = "●"
+	IndicatorBackground   = "◐"
+	IndicatorExecuting    = "▶"
+	IndicatorPaused       = "⏸"
 	IndicatorSelected     = "▸"
 	IndicatorFolderOpen   = "▾"
 	IndicatorFolderClosed = "▸"

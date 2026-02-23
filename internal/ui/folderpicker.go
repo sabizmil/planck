@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// FolderPickerCancelledMsg is sent when the folder picker is cancelled
-type FolderPickerCancelledMsg struct{}
+// FolderPickerCanceledMsg is sent when the folder picker is canceled.
+type FolderPickerCanceledMsg struct{}
 
 // FolderPicker displays a folder selection dialog
 type FolderPicker struct {
@@ -47,8 +47,7 @@ type FolderSelectedMsg struct {
 
 // Update handles messages
 func (f *FolderPicker) Update(msg tea.Msg) (*FolderPicker, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		if f.inputMode {
 			return f.updateInputMode(msg)
 		}
@@ -103,7 +102,7 @@ func (f *FolderPicker) updateListMode(msg tea.KeyMsg) (*FolderPicker, tea.Cmd) {
 
 	case "q", "esc":
 		if f.overlay {
-			return f, func() tea.Msg { return FolderPickerCancelledMsg{} }
+			return f, func() tea.Msg { return FolderPickerCanceledMsg{} }
 		}
 		return f, tea.Quit
 	}
@@ -151,7 +150,7 @@ func (f *FolderPicker) updateInputMode(msg tea.KeyMsg) (*FolderPicker, tea.Cmd) 
 		}
 
 	case tea.KeyBackspace:
-		if len(f.inputBuffer) > 0 && f.inputCursor > 0 {
+		if f.inputBuffer != "" && f.inputCursor > 0 {
 			f.inputBuffer = f.inputBuffer[:f.inputCursor-1] + f.inputBuffer[f.inputCursor:]
 			f.inputCursor--
 		}
