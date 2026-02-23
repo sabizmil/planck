@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/anthropics/planck/internal/store"
+	"github.com/sabizmil/planck/internal/store"
 )
 
 // Manager manages all sessions

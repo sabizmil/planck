@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/anthropics/planck/internal/agent"
+	"github.com/sabizmil/planck/internal/agent"
 )
 
 // Tool use status icons

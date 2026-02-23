@@ -1,5 +1,8 @@
 # Planck
 
+[![CI](https://github.com/sabizmil/planck/actions/workflows/ci.yml/badge.svg)](https://github.com/sabizmil/planck/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A terminal UI for AI-assisted planning and task management, orchestrating multiple agent sessions in a tabbed interface.
 
 ## Overview
@@ -16,7 +19,7 @@ Planck is a TUI (Terminal User Interface) built with [Bubble Tea](https://github
 ### From Source
 
 ```bash
-git clone https://github.com/anthropics/planck.git
+git clone https://github.com/sabizmil/planck.git
 cd planck
 make install
 ```
@@ -24,14 +27,7 @@ make install
 ### Using Go
 
 ```bash
-go install github.com/anthropics/planck/cmd/planck@latest
-```
-
-### Homebrew (macOS)
-
-```bash
-brew tap anthropics/tap
-brew install planck
+go install github.com/sabizmil/planck/cmd/planck@latest
 ```
 
 ## Requirements
@@ -207,9 +203,9 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Contributing
 
-Contributions welcome! Please read our contributing guidelines.
+Contributions welcome! Please read our [Contributing Guide](CONTRIBUTING.md).
 
 ## Support
 
-- [GitHub Issues](https://github.com/anthropics/planck/issues)
-- [Documentation](https://github.com/anthropics/planck/wiki)
+- [GitHub Issues](https://github.com/sabizmil/planck/issues)
+- [Documentation](https://github.com/sabizmil/planck/wiki)

@@ -71,26 +71,9 @@ changelog:
     - title: Other
       order: 999
 
-brews:
-  - name: planck
-    repository:
-      owner: anthropics
-      name: homebrew-tap
-    directory: Formula
-    homepage: "https://github.com/anthropics/planck"
-    description: "Terminal UI for iteratively refining plans with AI"
-    license: MIT
-    dependencies:
-      - name: tmux
-        type: optional
-    test: |
-      system "#{bin}/planck", "--version"
-    install: |
-      bin.install "planck"
-
 release:
   github:
-    owner: anthropics
+    owner: sabizmil
     name: planck
   draft: false
   prerelease: auto

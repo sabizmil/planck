@@ -32,7 +32,7 @@ linters-settings:
     simplify: true
 
   goimports:
-    local-prefixes: github.com/anthropics/planck
+    local-prefixes: github.com/sabizmil/planck
 
   gocritic:
     enabled-tags:

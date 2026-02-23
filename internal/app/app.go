@@ -15,11 +15,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
 
-	"github.com/anthropics/planck/internal/config"
-	"github.com/anthropics/planck/internal/session"
-	"github.com/anthropics/planck/internal/store"
-	"github.com/anthropics/planck/internal/ui"
-	"github.com/anthropics/planck/internal/workspace"
+	"github.com/sabizmil/planck/internal/config"
+	"github.com/sabizmil/planck/internal/session"
+	"github.com/sabizmil/planck/internal/store"
+	"github.com/sabizmil/planck/internal/ui"
+	"github.com/sabizmil/planck/internal/workspace"
 )
 
 // Focus represents which panel is focused

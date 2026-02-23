@@ -5,7 +5,7 @@
 Planck is a terminal UI (TUI) application for AI-assisted planning and task management. It orchestrates multiple Claude Code agent sessions via tmux, providing a structured workflow for breaking down complex tasks.
 
 - **Language:** Go 1.24+
-- **Module:** `github.com/anthropics/planck`
+- **Module:** `github.com/sabizmil/planck`
 - **Entry point:** `cmd/planck/main.go`
 - **Storage:** SQLite (via `modernc.org/sqlite`)
 - **TUI framework:** Bubble Tea (`charmbracelet/bubbletea`)
@@ -156,5 +156,4 @@ docs/changelog/    # Tracked changelogs (in git)
 Before writing code for any non-trivial task:
 1. Consider 3-5 different approaches
 2. Evaluate trade-offs (performance, maintainability, complexity)
-3. Select the best approach and document rationale
-4. Then implement
+3. Write out a plan using the /plan tool

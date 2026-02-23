@@ -8,7 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/anthropics/planck/internal/workspace"
+	"github.com/sabizmil/planck/internal/workspace"
 )
 
 // padToWidth pads a string with spaces so it reaches the given rune width.

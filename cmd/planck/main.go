@@ -8,10 +8,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/anthropics/planck/internal/app"
-	"github.com/anthropics/planck/internal/config"
-	"github.com/anthropics/planck/internal/session"
-	"github.com/anthropics/planck/internal/workspace"
+	"github.com/sabizmil/planck/internal/app"
+	"github.com/sabizmil/planck/internal/config"
+	"github.com/sabizmil/planck/internal/session"
+	"github.com/sabizmil/planck/internal/workspace"
 )
 
 var (
@@ -202,5 +202,5 @@ Keybindings (Agent Tab - Normal Mode):
   x           Close tab
   a           New agent tab
 
-For more information, visit: https://github.com/anthropics/planck`)
+For more information, visit: https://github.com/sabizmil/planck`)
 }

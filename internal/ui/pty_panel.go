@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/anthropics/planck/internal/session"
+	"github.com/sabizmil/planck/internal/session"
 )
 
 // PTYPanel displays an embedded PTY session
