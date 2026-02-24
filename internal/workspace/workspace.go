@@ -442,4 +442,3 @@ func (w *Workspace) StopWatch() {
 		w.watcher = nil
 	}
 }
-

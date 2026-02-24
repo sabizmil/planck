@@ -45,7 +45,7 @@ type CheckResult struct {
 func Check(currentVersion string) (*CheckResult, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", githubRepo)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", url, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -255,14 +255,15 @@ func extractBinary(archivePath, destPath string) error {
 		}
 
 		if filepath.Base(header.Name) == binaryName && header.Typeflag == tar.TypeReg {
-			out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+			out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 			if err != nil {
 				return err
 			}
-			defer out.Close()
 
-			if _, err := io.Copy(out, tr); err != nil {
-				return err
+			_, copyErr := io.Copy(out, tr)
+			out.Close()
+			if copyErr != nil {
+				return copyErr
 			}
 			return nil
 		}

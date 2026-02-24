@@ -1286,9 +1286,15 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 func (a *App) handlePlanningMouse(msg tea.MouseMsg) {
 	me := tea.MouseEvent(msg)
 
-	// Wheel events: forward to editor regardless of focus
+	// Wheel events: forward to editor regardless of focus.
+	// However, suppress wheel events while a drag selection is in progress —
+	// trackpads on macOS commonly intersperse scroll events during a click-drag,
+	// and scrolling the viewport mid-selection causes the same screen position
+	// to map to different text rows, producing visual jumping.
 	if me.IsWheel() {
-		a.editor.Update(msg)
+		if !a.editor.Selecting() {
+			a.editor.Update(msg)
+		}
 		return
 	}
 
@@ -1334,6 +1340,12 @@ func (a *App) handlePlanningMouse(msg tea.MouseMsg) {
 		}
 	}
 
+	// Forward motion/release to editor when it's performing a drag selection
+	if a.editor.Selecting() && (me.Action == tea.MouseActionMotion || me.Action == tea.MouseActionRelease) {
+		a.editor.Update(msg)
+		return
+	}
+
 	// Left click on editor area: switch focus and place cursor
 	if msg.Button == tea.MouseButtonLeft && me.Action == tea.MouseActionPress && msg.X >= a.sidebarWidth+1 {
 		if a.focus != FocusEditor {
@@ -1344,11 +1356,6 @@ func (a *App) handlePlanningMouse(msg tea.MouseMsg) {
 		a.editor.Update(msg)
 		a.prevCursor = a.fileList.Cursor()
 	}
-}
-
-func (a *App) updateFocus() {
-	a.fileList.SetFocused(a.focus == FocusFileList)
-	a.editor.SetFocused(a.focus == FocusEditor)
 }
 
 func (a *App) loadFile(name string) {

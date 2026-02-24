@@ -124,7 +124,7 @@ func main() {
 func runUpdate(args []string) {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
 	checkOnly := fs.Bool("check", false, "Only check for updates, don't install")
-	fs.Parse(args) //nolint:errcheck
+	fs.Parse(args) //nolint:errcheck // flag.ExitOnError handles parse errors
 
 	fmt.Printf("Current version: %s\n", version)
 
@@ -165,7 +165,7 @@ func runUpdate(args []string) {
 func runVersion(args []string) {
 	fs := flag.NewFlagSet("version", flag.ExitOnError)
 	checkUpdate := fs.Bool("check", false, "Check if a newer version is available")
-	fs.Parse(args) //nolint:errcheck
+	fs.Parse(args) //nolint:errcheck // flag.ExitOnError handles parse errors
 
 	fmt.Printf("planck %s (commit: %s, built: %s)\n", version, commit, buildTime)
 
