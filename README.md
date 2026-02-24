@@ -1,6 +1,7 @@
 # Planck
 
 [![CI](https://github.com/sabizmil/planck/actions/workflows/ci.yml/badge.svg)](https://github.com/sabizmil/planck/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/sabizmil/planck?include_prereleases)](https://github.com/sabizmil/planck/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A terminal UI for AI-assisted planning and task management, orchestrating multiple agent sessions in a tabbed interface.
@@ -16,12 +17,10 @@ Planck is a TUI (Terminal User Interface) built with [Bubble Tea](https://github
 
 ## Installation
 
-### From Source
+### Quick Install (macOS / Linux)
 
 ```bash
-git clone https://github.com/sabizmil/planck.git
-cd planck
-make install
+curl -sSfL https://raw.githubusercontent.com/sabizmil/planck/main/scripts/install.sh | sh
 ```
 
 ### Using Go
@@ -30,9 +29,26 @@ make install
 go install github.com/sabizmil/planck/cmd/planck@latest
 ```
 
+### From GitHub Releases
+
+Download a pre-built binary from the [latest release](https://github.com/sabizmil/planck/releases/latest) for your platform.
+
+### From Source
+
+```bash
+git clone https://github.com/sabizmil/planck.git
+cd planck
+make install
+```
+
+### Updating
+
+```bash
+planck update
+```
+
 ## Requirements
 
-- Go 1.24 or later
 - tmux (optional, for tmux-based sessions)
 - Claude Code CLI or other AI agent CLI
 

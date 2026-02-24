@@ -11,16 +11,28 @@ import (
 	"github.com/sabizmil/planck/internal/app"
 	"github.com/sabizmil/planck/internal/config"
 	"github.com/sabizmil/planck/internal/session"
-	"github.com/sabizmil/planck/internal/workspace"
+	"github.com/sabizmil/planck/internal/updater"
 )
 
 var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
+	version   = "dev"
+	commit    = "none"
+	buildTime = "unknown"
 )
 
 func main() {
+	// Handle subcommands before flag parsing
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "update":
+			runUpdate(os.Args[2:])
+			return
+		case "version":
+			runVersion(os.Args[2:])
+			return
+		}
+	}
+
 	// Define flags
 	folderFlag := flag.String("folder", "", "Folder containing markdown files")
 	versionFlag := flag.Bool("version", false, "Show version information")
@@ -33,7 +45,7 @@ func main() {
 	flag.Parse()
 
 	if *versionFlag {
-		fmt.Printf("planck %s (commit: %s, built: %s)\n", version, commit, date)
+		fmt.Printf("planck %s (commit: %s, built: %s)\n", version, commit, buildTime)
 		os.Exit(0)
 	}
 
@@ -42,45 +54,22 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Load recent folders
 	configDir := getConfigDir()
-	recent, err := workspace.LoadRecentFolders(configDir)
-	if err != nil {
-		recent = &workspace.RecentFolders{}
-	}
 
-	// Determine folder to use
+	// Determine folder to use: -folder flag, or current working directory
 	var folder string
 	if *folderFlag != "" {
-		// Use provided folder
 		folder = *folderFlag
 		absPath, err := filepath.Abs(folder)
 		if err == nil {
 			folder = absPath
 		}
-	} else if len(flag.Args()) > 0 {
-		// Use positional argument
-		folder = flag.Args()[0]
-		absPath, err := filepath.Abs(folder)
-		if err == nil {
-			folder = absPath
-		}
-	}
-
-	// If no folder specified, reopen last folder or show picker
-	if folder == "" {
-		if len(recent.Folders) > 0 {
-			// Reopen the most recently used folder
-			folder = recent.Folders[0]
-		} else {
-			folder, err = runFolderPicker(recent.Folders)
-			if err != nil {
-				if err.Error() == "quit" {
-					os.Exit(0)
-				}
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
+	} else {
+		var err error
+		folder, err = os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: cannot determine current directory: %v\n", err)
+			os.Exit(1)
 		}
 	}
 
@@ -98,10 +87,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: not a directory: %s\n", folder)
 		os.Exit(1)
 	}
-
-	// Save to recent folders
-	recent.Add(folder)
-	_ = recent.Save(configDir) // Non-fatal, continue
 
 	// Load or create configuration
 	cfg, err := config.Load(folder)
@@ -136,6 +121,70 @@ func main() {
 	}
 }
 
+func runUpdate(args []string) {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	checkOnly := fs.Bool("check", false, "Only check for updates, don't install")
+	fs.Parse(args) //nolint:errcheck
+
+	fmt.Printf("Current version: %s\n", version)
+
+	if version == "dev" {
+		fmt.Println("Development build — cannot check for updates.")
+		fmt.Println("Install a release build to use self-update.")
+		os.Exit(0)
+	}
+
+	fmt.Println("Checking for updates...")
+	result, err := updater.Check(version)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error checking for updates: %v\n", err)
+		os.Exit(1)
+	}
+
+	if !result.UpdateAvail {
+		fmt.Printf("Already up to date (v%s).\n", result.CurrentVersion)
+		return
+	}
+
+	fmt.Printf("Update available: v%s -> v%s\n", result.CurrentVersion, result.LatestVersion)
+
+	if *checkOnly {
+		fmt.Println("\nRun 'planck update' to install the update.")
+		return
+	}
+
+	fmt.Println("Downloading and installing...")
+	if err := updater.Update(result); err != nil {
+		fmt.Fprintf(os.Stderr, "Error updating: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Updated to v%s!\n", result.LatestVersion)
+}
+
+func runVersion(args []string) {
+	fs := flag.NewFlagSet("version", flag.ExitOnError)
+	checkUpdate := fs.Bool("check", false, "Check if a newer version is available")
+	fs.Parse(args) //nolint:errcheck
+
+	fmt.Printf("planck %s (commit: %s, built: %s)\n", version, commit, buildTime)
+
+	if *checkUpdate && version != "dev" {
+		fmt.Println()
+		result, err := updater.Check(version)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Could not check for updates: %v\n", err)
+			return
+		}
+		if result.UpdateAvail {
+			fmt.Printf("Update available: v%s -> v%s\n", result.CurrentVersion, result.LatestVersion)
+			fmt.Println("Run 'planck update' to install.")
+		} else {
+			fmt.Println("Up to date.")
+		}
+	}
+}
+
 func getConfigDir() string {
 	// Use ~/.config/planck
 	home, err := os.UserHomeDir()
@@ -145,36 +194,24 @@ func getConfigDir() string {
 	return filepath.Join(home, ".config", "planck")
 }
 
-func runFolderPicker(recentFolders []string) (string, error) {
-	picker := app.NewFolderPickerModel(recentFolders)
-	p := tea.NewProgram(picker, tea.WithAltScreen())
-
-	model, err := p.Run()
-	if err != nil {
-		return "", err
-	}
-
-	result, ok := model.(*app.FolderPickerModel)
-	if !ok {
-		return "", fmt.Errorf("unexpected model type")
-	}
-	if result.Quit {
-		return "", fmt.Errorf("quit")
-	}
-
-	return result.SelectedFolder, nil
-}
-
 func printHelp() {
 	fmt.Println(`planck - Folder-based markdown editor with multi-agent support
 
 Usage:
-  planck [options] [folder]
+  planck [options]
+  planck update [--check]
+  planck version [--check]
 
 Options:
-  -f, --folder PATH  Folder containing markdown files
+  -f, --folder PATH  Folder containing markdown files (default: current directory)
   -h, --help         Show this help message
   -v, --version      Show version information
+
+Commands:
+  update             Download and install the latest version
+  update --check     Check for updates without installing
+  version            Show version information
+  version --check    Show version and check for updates
 
 Keybindings (Global):
   Tab         Cycle through tabs
@@ -190,7 +227,6 @@ Keybindings (Planning Tab):
   e           Edit file
   n           New file
   d           Delete file
-  o           Switch folder
 
 Keybindings (Agent Tab - Input Mode):
   Ctrl+\      Exit to normal mode
