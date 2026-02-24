@@ -83,10 +83,6 @@ type App struct {
 	// Style state
 	styleRegistry *ui.StyleRegistry
 
-	// Overlays
-	folderPicker        *ui.FolderPicker
-	folderPickerVisible bool
-
 	// Multi-agent tabs
 	agentTabs       []*AgentTab    // ordered list of agent tabs
 	activeTabIdx    int            // 0 = planning, 1+ = agent tabs
@@ -557,28 +553,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a.settings.IsVisible() {
 		settings, cmd := a.settings.Update(msg)
 		a.settings = settings
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		return a, tea.Batch(cmds...)
-	}
-
-	// Folder picker overlay takes priority
-	if a.folderPickerVisible {
-		if fsm, ok := msg.(ui.FolderSelectedMsg); ok {
-			a.folderPickerVisible = false
-			cmd := a.switchFolder(fsm.Folder)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			return a, tea.Batch(cmds...)
-		}
-		if _, ok := msg.(ui.FolderPickerCanceledMsg); ok {
-			a.folderPickerVisible = false
-			return a, tea.Batch(cmds...)
-		}
-		picker, cmd := a.folderPicker.Update(msg)
-		a.folderPicker = picker
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -1303,9 +1277,6 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 			a.refreshFiles()
 			a.message = "Files refreshed"
 
-		case "o":
-			// Open folder picker
-			a.showFolderPicker()
 		}
 	}
 
@@ -1478,11 +1449,6 @@ func (a *App) View() string {
 		view = a.settings.View()
 	}
 
-	// Overlay folder picker if visible
-	if a.folderPickerVisible && a.folderPicker != nil {
-		view = a.folderPicker.View()
-	}
-
 	return view
 }
 
@@ -1495,15 +1461,13 @@ func (a *App) renderStatusBar() string {
 	case a.message != "":
 		leftContent = a.theme.Normal.Render(a.message)
 		a.message = "" // Clear after showing
-	case a.folderPickerVisible:
-		leftContent = a.theme.KeyHint.Render("[^|v] navigate  [Enter] select  [b] browse  [Esc] cancel")
 	default:
 		// Show context hints
 		if a.isOnPlanningTab() {
 			if a.editor.Mode() == ui.EditorModeEdit {
 				leftContent = a.theme.KeyHint.Render("[Esc] save & exit  [Ctrl+S] save")
 			} else {
-				leftContent = a.theme.KeyHint.Render("[^|v] navigate  [e] edit  [n] new  [d] delete  [r] refresh  [o] folder  [a] agent  [s] settings  [Tab] cycle")
+				leftContent = a.theme.KeyHint.Render("[^|v] navigate  [e] edit  [n] new  [d] delete  [r] refresh  [a] agent  [s] settings  [Tab] cycle")
 			}
 		} else {
 			panel := a.activePanel()
@@ -1553,10 +1517,6 @@ func (a *App) updateSizes() {
 	a.dialog.SetSize(a.width, a.height)
 	a.help.SetSize(a.width, a.height)
 	a.settings.SetSize(a.width, a.height)
-	if a.folderPicker != nil {
-		a.folderPicker.SetSize(a.width, a.height)
-	}
-
 	// Resize all agent PTY panels
 	for _, tab := range a.agentTabs {
 		tab.panel.SetSize(a.width, contentHeight)
@@ -1565,157 +1525,6 @@ func (a *App) updateSizes() {
 			_ = a.sessionBackend.Resize(tab.session.BackendHandle, uint16(rows), uint16(cols))
 		}
 	}
-}
-
-func (a *App) showFolderPicker() {
-	// Load fresh recent folders
-	recent, err := workspace.LoadRecentFolders(a.configDir)
-	if err != nil {
-		recent = &workspace.RecentFolders{}
-	}
-
-	a.folderPicker = ui.NewFolderPicker(a.theme, recent.Folders)
-	a.folderPicker.SetOverlayMode(true)
-	a.folderPicker.SetSize(a.width, a.height)
-	a.folderPickerVisible = true
-}
-
-func (a *App) switchFolder(newFolder string) tea.Cmd {
-	// Auto-save editor if modified
-	if a.editor.IsModified() {
-		content := a.editor.GetContent()
-		fileName := a.editor.FileName()
-		if fileName != "" {
-			_ = a.workspace.SaveFile(fileName, content)
-		}
-		a.editor.ClearModified()
-	}
-
-	// Kill all agent sessions and remove all agent tabs
-	a.killAllSessions()
-	a.agentTabs = nil
-	a.nextInstanceNum = make(map[string]int)
-
-	// Stop old workspace watcher
-	a.workspace.StopWatch()
-
-	// Create new workspace
-	ws, err := workspace.New(newFolder)
-	if err != nil {
-		a.message = fmt.Sprintf("Error switching folder: %v", err)
-		return nil
-	}
-	a.workspace = ws
-	a.folder = newFolder
-
-	// Start new file watcher
-	watchChan, err := a.workspace.Watch()
-	if err == nil {
-		a.watchChan = watchChan
-	}
-
-	// Reload config
-	cfg, err := config.Load(newFolder)
-	if err == nil {
-		a.config = cfg
-	}
-
-	// Reopen store
-	a.store.Close()
-	st, err := store.Open(a.config.StateDBPath())
-	if err == nil {
-		a.store = st
-	}
-
-	// Update UI — back to just Planning tab
-	a.tabs.SetFolderPath(newFolder)
-	a.syncTabBar()
-	a.refreshFiles()
-	a.editor.SetContent("", "")
-
-	// Select first file if available
-	files := a.workspace.Files()
-	if len(files) > 0 {
-		a.loadFile(files[0].Name)
-		a.prevCursor = a.fileList.Cursor()
-	}
-
-	// Switch to planning tab
-	a.activeTabIdx = 0
-	a.tabs.SetActiveIdx(0)
-	a.focus = FocusFileList
-	a.fileList.SetFocused(true)
-	a.updateFocus()
-
-	// Update recent folders
-	recent, err := workspace.LoadRecentFolders(a.configDir)
-	if err != nil {
-		recent = &workspace.RecentFolders{}
-	}
-	recent.Add(newFolder)
-	_ = recent.Save(a.configDir)
-
-	a.message = fmt.Sprintf("Switched to %s", newFolder)
-
-	return a.watchForChanges()
-}
-
-// FolderPickerModel is a standalone model for the folder picker
-type FolderPickerModel struct {
-	picker         *ui.FolderPicker
-	theme          *ui.Theme
-	SelectedFolder string
-	Quit           bool
-	width, height  int
-}
-
-// NewFolderPickerModel creates a new folder picker model
-func NewFolderPickerModel(recentFolders []string) *FolderPickerModel {
-	theme := ui.DefaultTheme()
-	return &FolderPickerModel{
-		picker: ui.NewFolderPicker(theme, recentFolders),
-		theme:  theme,
-	}
-}
-
-// Init initializes the folder picker
-func (m *FolderPickerModel) Init() tea.Cmd {
-	return nil
-}
-
-// Update handles messages
-func (m *FolderPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.picker.SetSize(msg.Width-4, msg.Height-4)
-		return m, nil
-
-	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
-			m.Quit = true
-			return m, tea.Quit
-		}
-
-	case ui.FolderSelectedMsg:
-		m.SelectedFolder = msg.Folder
-		return m, tea.Quit
-	}
-
-	picker, cmd := m.picker.Update(msg)
-	m.picker = picker
-	return m, cmd
-}
-
-// View renders the folder picker
-func (m *FolderPickerModel) View() string {
-	if m.width == 0 {
-		m.width = 80
-		m.height = 24
-		m.picker.SetSize(m.width-4, m.height-4)
-	}
-	return m.picker.View()
 }
 
 // hookSettingsJSON returns a --settings JSON string that configures Claude Code
