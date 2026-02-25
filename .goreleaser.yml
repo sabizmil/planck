@@ -40,7 +40,6 @@ archives:
     files:
       - README.md
       - LICENSE
-      - docs/**/*
 
 checksum:
   name_template: "checksums.txt"

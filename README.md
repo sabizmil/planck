@@ -1,7 +1,6 @@
 # Planck
 
 [![CI](https://github.com/sabizmil/planck/actions/workflows/ci.yml/badge.svg)](https://github.com/sabizmil/planck/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/sabizmil/planck?include_prereleases)](https://github.com/sabizmil/planck/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A terminal UI for AI-assisted planning and task management, orchestrating multiple agent sessions in a tabbed interface.
@@ -216,12 +215,3 @@ make build-all      # Cross-platform binaries (darwin/linux, amd64/arm64)
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions welcome! Please read our [Contributing Guide](CONTRIBUTING.md).
-
-## Support
-
-- [GitHub Issues](https://github.com/sabizmil/planck/issues)
-- [Documentation](https://github.com/sabizmil/planck/wiki)
