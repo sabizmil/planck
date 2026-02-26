@@ -125,7 +125,8 @@ func (h *Help) renderHelpContent() string {
 		{"e", "Enter edit mode"},
 		{"n", "New file"},
 		{"c", "Toggle complete"},
-		{"d", "Delete file"},
+		{"d", "Delete file/folder"},
+		{"m", "Move file/folder"},
 		{"r", "Refresh file list"},
 		{"o", "Switch folder"},
 	}))

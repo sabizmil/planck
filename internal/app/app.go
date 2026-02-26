@@ -501,6 +501,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Handle move mode messages from FileList
+	if msg, ok := msg.(ui.MoveConfirmedMsg); ok {
+		a.handleMoveConfirmed(msg)
+		a.fileList.ExitMoveMode()
+		return a, tea.Batch(cmds...)
+	}
+	if _, ok := msg.(ui.MoveCancelledMsg); ok {
+		a.fileList.ExitMoveMode()
+		a.message = "Move cancelled"
+		return a, tea.Batch(cmds...)
+	}
+
 	// Handle spinner tick — forward to tab bar and settings (for live preview)
 	if _, ok := msg.(ui.SpinnerTickMsg); ok {
 		_, cmd := a.tabs.Update(msg)
@@ -607,8 +619,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-			// Auto-preview: load file when cursor moves (only in view mode)
-			if a.fileList.Cursor() != a.prevCursor && a.editor.Mode() == ui.EditorModeView {
+			// Auto-preview: load file when cursor moves (only in view mode, not in move mode)
+			if a.fileList.Cursor() != a.prevCursor && a.editor.Mode() == ui.EditorModeView && !a.fileList.InMoveMode() {
 				a.prevCursor = a.fileList.Cursor()
 				if file := a.fileList.SelectedFile(); file != nil {
 					a.loadFile(file.Name)
@@ -1094,12 +1106,14 @@ func sanitizeTabTitle(raw string) string {
 		return ""
 	}
 
-	// Strip non-printable, control, zero-width / format, and braille pattern
-	// characters (U+2800–U+28FF). Braille dots leak from Claude Code's OSC
-	// window title; we strip them so the spinner is solely Planck's.
+	// Strip non-printable, control, zero-width / format characters, braille
+	// pattern characters (U+2800–U+28FF), and dingbats (U+2700–U+27BF).
+	// Both braille dots and dingbat asterisks (✢ ✳ ✶ ✻ ✽) leak from Claude
+	// Code's OSC window title as spinner frames; we strip them so the spinner
+	// is solely Planck's.
 	var sb strings.Builder
 	for _, r := range raw {
-		if r >= 0x2800 && r <= 0x28FF {
+		if r >= 0x2700 && r <= 0x28FF {
 			continue
 		}
 		if unicode.IsPrint(r) && !unicode.Is(unicode.Cf, r) {
@@ -1231,6 +1245,11 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	// In move mode, let FileList handle all keys
+	if a.fileList.InMoveMode() {
+		return nil
+	}
+
 	if a.focus == FocusFileList {
 		switch key {
 		case "enter":
@@ -1266,8 +1285,8 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 			})
 
 		case "d", "D":
-			// Delete file (no-op on directories)
 			if file := a.fileList.SelectedFile(); file != nil {
+				// Delete file
 				a.dialog.ShowConfirm(
 					"Delete File?",
 					fmt.Sprintf("Delete '%s'?", file.Name),
@@ -1279,6 +1298,27 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 								a.refreshFiles()
 								a.editor.SetContent("", "")
 								a.message = "File deleted"
+							}
+						}
+					},
+				)
+			} else if dirPath := a.fileList.SelectedDirPath(); dirPath != "" {
+				// Delete folder
+				a.dialog.ShowConfirm(
+					"Delete Folder?",
+					fmt.Sprintf("Delete '%s' and all files inside?", dirPath),
+					func(result ui.DialogResult) {
+						if result.Confirmed {
+							// Clear editor if current file is inside the deleted folder
+							editorFile := a.editor.FileName()
+							if editorFile != "" && strings.HasPrefix(editorFile, dirPath+"/") {
+								a.editor.SetContent("", "")
+							}
+							if err := a.workspace.DeleteFolder(dirPath); err != nil {
+								a.message = fmt.Sprintf("Error: %v", err)
+							} else {
+								a.refreshFiles()
+								a.message = "Folder deleted"
 							}
 						}
 					},
@@ -1309,6 +1349,12 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 				}
 			}
 
+		case "m":
+			// Enter move mode
+			if a.fileList.SelectedPath() != "" {
+				a.fileList.EnterMoveMode()
+			}
+
 		case "r":
 			// Manual refresh
 			a.refreshFiles()
@@ -1320,22 +1366,67 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+func (a *App) handleMoveConfirmed(msg ui.MoveConfirmedMsg) {
+	var err error
+	if msg.IsDir {
+		err = a.workspace.MoveFolder(msg.SourcePath, msg.DestDir)
+	} else {
+		err = a.workspace.MoveFile(msg.SourcePath, msg.DestDir)
+	}
+
+	if err != nil {
+		a.message = fmt.Sprintf("Move error: %v", err)
+		return
+	}
+
+	a.refreshFiles()
+
+	// Compute the new relative path of the moved item
+	baseName := msg.SourcePath
+	if idx := strings.LastIndex(msg.SourcePath, "/"); idx >= 0 {
+		baseName = msg.SourcePath[idx+1:]
+	}
+	var newPath string
+	if msg.DestDir == "" {
+		newPath = baseName
+	} else {
+		newPath = msg.DestDir + "/" + baseName
+	}
+
+	// Re-select the moved item and update editor if needed
+	a.fileList.SelectPath(newPath)
+	if !msg.IsDir && a.editor.FileName() == msg.SourcePath {
+		a.loadFile(newPath)
+	}
+	// If we moved a folder containing the open file, update the editor
+	if msg.IsDir && a.editor.FileName() != "" && strings.HasPrefix(a.editor.FileName(), msg.SourcePath+"/") {
+		newFileName := newPath + a.editor.FileName()[len(msg.SourcePath):]
+		a.loadFile(newFileName)
+	}
+
+	a.message = fmt.Sprintf("Moved to %s", newPath)
+}
+
 func (a *App) handlePlanningMouse(msg tea.MouseMsg) {
 	me := tea.MouseEvent(msg)
 
-	// Wheel events: forward to editor regardless of focus.
-	// However, suppress wheel events while a drag selection is in progress —
+	borderCol := a.sidebarWidth // the border sits at this column
+
+	// Wheel events: route to file list or editor based on cursor X position.
+	// Suppress editor wheel events while a drag selection is in progress —
 	// trackpads on macOS commonly intersperse scroll events during a click-drag,
 	// and scrolling the viewport mid-selection causes the same screen position
 	// to map to different text rows, producing visual jumping.
 	if me.IsWheel() {
-		if !a.editor.Selecting() {
+		if msg.X < borderCol {
+			// Mouse is over the file list — scroll the file list
+			a.fileList.HandleMouse(msg)
+		} else if !a.editor.Selecting() {
+			// Mouse is over the editor — scroll the markdown viewer
 			a.editor.Update(msg)
 		}
 		return
 	}
-
-	borderCol := a.sidebarWidth // the border sits at this column
 
 	// Start drag: mouse down on or near the sidebar border (±1 col tolerance)
 	if msg.Button == tea.MouseButtonLeft && me.Action == tea.MouseActionPress {
@@ -1380,6 +1471,27 @@ func (a *App) handlePlanningMouse(msg tea.MouseMsg) {
 	// Forward motion/release to editor when it's performing a drag selection
 	if a.editor.Selecting() && (me.Action == tea.MouseActionMotion || me.Action == tea.MouseActionRelease) {
 		a.editor.Update(msg)
+		return
+	}
+
+	// Left click on file list area: switch focus and handle the click
+	if msg.Button == tea.MouseButtonLeft && me.Action == tea.MouseActionPress && msg.X < borderCol-1 {
+		action := a.fileList.HandleMouse(msg)
+		if action != ui.ClickNone {
+			// Switch focus to file list
+			if a.focus != FocusFileList {
+				a.focus = FocusFileList
+				a.fileList.SetFocused(true)
+				a.editor.SetFocused(false)
+			}
+			// Auto-preview: load clicked file in editor (only in view mode)
+			if action == ui.ClickFile && a.editor.Mode() == ui.EditorModeView {
+				if file := a.fileList.SelectedFile(); file != nil {
+					a.loadFile(file.Name)
+				}
+			}
+			a.prevCursor = a.fileList.Cursor()
+		}
 		return
 	}
 
@@ -1556,6 +1668,7 @@ func (a *App) updateSizes() {
 	// Set component sizes
 	a.tabs.SetWidth(a.width)
 	a.fileList.SetSize(fileListWidth, contentHeight)
+	a.fileList.SetPosition(2) // tab bar label row + tab bar border row
 	a.editor.SetSize(editorWidth, contentHeight)
 	a.editor.SetPosition(fileListWidth+1, 2) // +1 for border, 2 for tab bar
 	a.dialog.SetSize(a.width, a.height)

@@ -141,6 +141,272 @@ func TestToggleFileStatus(t *testing.T) {
 	}
 }
 
+func TestDeleteFolder(t *testing.T) {
+	t.Run("delete folder with nested content", func(t *testing.T) {
+		dir := t.TempDir()
+		// Create nested structure
+		sub := filepath.Join(dir, "plans")
+		os.MkdirAll(filepath.Join(sub, "deep"), 0o755)
+		os.WriteFile(filepath.Join(sub, "a.md"), []byte("# A\n"), 0o644)
+		os.WriteFile(filepath.Join(sub, "deep", "b.md"), []byte("# B\n"), 0o644)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+		if len(ws.Files()) != 2 {
+			t.Fatalf("expected 2 files, got %d", len(ws.Files()))
+		}
+
+		if err := ws.DeleteFolder("plans"); err != nil {
+			t.Fatalf("delete folder: %v", err)
+		}
+
+		// Folder should be gone
+		if _, err := os.Stat(sub); !os.IsNotExist(err) {
+			t.Error("folder still exists after deletion")
+		}
+		// Workspace should have no files
+		if len(ws.Files()) != 0 {
+			t.Errorf("expected 0 files after deletion, got %d", len(ws.Files()))
+		}
+	})
+
+	t.Run("delete non-existent folder", func(t *testing.T) {
+		dir := t.TempDir()
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		err = ws.DeleteFolder("nonexistent")
+		if err == nil {
+			t.Error("expected error deleting non-existent folder")
+		}
+	})
+
+	t.Run("delete rejects path outside workspace", func(t *testing.T) {
+		dir := t.TempDir()
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		err = ws.DeleteFolder("../../etc")
+		if err == nil {
+			t.Error("expected error for path traversal")
+		}
+	})
+
+	t.Run("delete rejects file path", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "file.md"), []byte("# File\n"), 0o644)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		err = ws.DeleteFolder("file.md")
+		if err == nil {
+			t.Error("expected error when deleting a file as folder")
+		}
+	})
+}
+
+func TestMoveFile(t *testing.T) {
+	t.Run("move file to subfolder", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "task.md"), []byte("# Task\n"), 0o644)
+		os.MkdirAll(filepath.Join(dir, "archive"), 0o755)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		if err := ws.MoveFile("task.md", "archive"); err != nil {
+			t.Fatalf("move file: %v", err)
+		}
+
+		// Old path should be gone
+		if _, err := os.Stat(filepath.Join(dir, "task.md")); !os.IsNotExist(err) {
+			t.Error("file still exists at old path")
+		}
+		// New path should exist
+		if _, err := os.Stat(filepath.Join(dir, "archive", "task.md")); err != nil {
+			t.Error("file not found at new path")
+		}
+		// Workspace should reflect the move
+		if f := ws.GetFile("archive/task.md"); f == nil {
+			t.Error("workspace doesn't have file at new path")
+		}
+	})
+
+	t.Run("move file to root", func(t *testing.T) {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+		os.WriteFile(filepath.Join(dir, "sub", "task.md"), []byte("# Task\n"), 0o644)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		if err := ws.MoveFile("sub/task.md", ""); err != nil {
+			t.Fatalf("move file: %v", err)
+		}
+
+		if f := ws.GetFile("task.md"); f == nil {
+			t.Error("file not found at root after move")
+		}
+	})
+
+	t.Run("move file creates intermediate dirs", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "task.md"), []byte("# Task\n"), 0o644)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		if err := ws.MoveFile("task.md", "a/b/c"); err != nil {
+			t.Fatalf("move file: %v", err)
+		}
+
+		if f := ws.GetFile("a/b/c/task.md"); f == nil {
+			t.Error("file not found at new nested path")
+		}
+	})
+
+	t.Run("move file rejects same location", func(t *testing.T) {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+		os.WriteFile(filepath.Join(dir, "sub", "task.md"), []byte("# Task\n"), 0o644)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		err = ws.MoveFile("sub/task.md", "sub")
+		if err == nil {
+			t.Error("expected error moving to same location")
+		}
+	})
+
+	t.Run("move file rejects name conflict", func(t *testing.T) {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+		os.WriteFile(filepath.Join(dir, "task.md"), []byte("# Task 1\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "sub", "task.md"), []byte("# Task 2\n"), 0o644)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		err = ws.MoveFile("task.md", "sub")
+		if err == nil {
+			t.Error("expected error for name conflict")
+		}
+	})
+}
+
+func TestMoveFolder(t *testing.T) {
+	t.Run("move folder to another folder", func(t *testing.T) {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "src"), 0o755)
+		os.MkdirAll(filepath.Join(dir, "dest"), 0o755)
+		os.WriteFile(filepath.Join(dir, "src", "task.md"), []byte("# Task\n"), 0o644)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		if err := ws.MoveFolder("src", "dest"); err != nil {
+			t.Fatalf("move folder: %v", err)
+		}
+
+		if _, err := os.Stat(filepath.Join(dir, "dest", "src", "task.md")); err != nil {
+			t.Error("file not found at new path after folder move")
+		}
+		if f := ws.GetFile("dest/src/task.md"); f == nil {
+			t.Error("workspace doesn't reflect moved file")
+		}
+	})
+
+	t.Run("move folder to root", func(t *testing.T) {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "parent", "child"), 0o755)
+		os.WriteFile(filepath.Join(dir, "parent", "child", "task.md"), []byte("# Task\n"), 0o644)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		if err := ws.MoveFolder("parent/child", ""); err != nil {
+			t.Fatalf("move folder: %v", err)
+		}
+
+		if f := ws.GetFile("child/task.md"); f == nil {
+			t.Error("file not found at root/child after move")
+		}
+	})
+
+	t.Run("move folder into itself is rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "src", "sub"), 0o755)
+		os.WriteFile(filepath.Join(dir, "src", "task.md"), []byte("# Task\n"), 0o644)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		err = ws.MoveFolder("src", "src/sub")
+		if err == nil {
+			t.Error("expected error moving folder into itself")
+		}
+	})
+
+	t.Run("move folder same location is rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "src"), 0o755)
+		os.WriteFile(filepath.Join(dir, "src", "task.md"), []byte("# Task\n"), 0o644)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		err = ws.MoveFolder("src", "")
+		if err == nil {
+			t.Error("expected error moving to same location")
+		}
+	})
+
+	t.Run("move folder rejects name conflict", func(t *testing.T) {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "src"), 0o755)
+		os.MkdirAll(filepath.Join(dir, "dest", "src"), 0o755)
+		os.WriteFile(filepath.Join(dir, "src", "task.md"), []byte("# Task\n"), 0o644)
+
+		ws, err := New(dir)
+		if err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+
+		err = ws.MoveFolder("src", "dest")
+		if err == nil {
+			t.Error("expected error for name conflict")
+		}
+	})
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

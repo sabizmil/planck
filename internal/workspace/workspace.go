@@ -353,6 +353,123 @@ func setFrontmatterStatus(content, status string) string {
 	return frontmatter + content
 }
 
+// DeleteFolder recursively deletes a subdirectory and all its contents.
+// The name is a relative path within the workspace (e.g. "subdir" or "a/b").
+func (w *Workspace) DeleteFolder(name string) error {
+	absPath := filepath.Join(w.folder, filepath.FromSlash(name))
+
+	// Safety: ensure the resolved path is inside the workspace
+	absPath, err := filepath.Abs(absPath)
+	if err != nil {
+		return fmt.Errorf("resolve folder path: %w", err)
+	}
+	if !strings.HasPrefix(absPath, w.folder+string(filepath.Separator)) {
+		return fmt.Errorf("path is outside workspace: %s", name)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("folder not found: %s", name)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("not a directory: %s", name)
+	}
+
+	if err := os.RemoveAll(absPath); err != nil {
+		return fmt.Errorf("delete folder: %w", err)
+	}
+
+	return w.Refresh()
+}
+
+// MoveFile moves a file to a different directory within the workspace.
+// oldName is the file's current relative path (e.g. "subdir/task.md").
+// newDir is the destination directory relative path (e.g. "other" or "" for root).
+func (w *Workspace) MoveFile(oldName, newDir string) error {
+	f := w.GetFile(oldName)
+	if f == nil {
+		return fmt.Errorf("file not found: %s", oldName)
+	}
+
+	baseName := filepath.Base(f.Path)
+	destDir := filepath.Join(w.folder, filepath.FromSlash(newDir))
+	destPath := filepath.Join(destDir, baseName)
+
+	// Don't move to the same location
+	if f.Path == destPath {
+		return fmt.Errorf("file is already in this folder")
+	}
+
+	// Check for name conflict
+	if _, err := os.Stat(destPath); err == nil {
+		return fmt.Errorf("a file named '%s' already exists in the destination", baseName)
+	}
+
+	// Ensure destination directory exists
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("create destination directory: %w", err)
+	}
+
+	if err := os.Rename(f.Path, destPath); err != nil {
+		return fmt.Errorf("move file: %w", err)
+	}
+
+	return w.Refresh()
+}
+
+// MoveFolder moves a directory to a different parent directory within the workspace.
+// oldPath is the directory's current relative path (e.g. "subdir").
+// newDir is the destination parent relative path (e.g. "other" or "" for root).
+func (w *Workspace) MoveFolder(oldPath, newDir string) error {
+	srcAbs := filepath.Join(w.folder, filepath.FromSlash(oldPath))
+
+	info, err := os.Stat(srcAbs)
+	if err != nil {
+		return fmt.Errorf("folder not found: %s", oldPath)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("not a directory: %s", oldPath)
+	}
+
+	baseName := filepath.Base(srcAbs)
+	destParent := filepath.Join(w.folder, filepath.FromSlash(newDir))
+	destPath := filepath.Join(destParent, baseName)
+
+	// Don't move to the same location
+	if srcAbs == destPath {
+		return fmt.Errorf("folder is already in this location")
+	}
+
+	// Prevent moving a folder into itself or a descendant
+	destAbs, err := filepath.Abs(destParent)
+	if err != nil {
+		return fmt.Errorf("resolve destination path: %w", err)
+	}
+	srcAbsResolved, err := filepath.Abs(srcAbs)
+	if err != nil {
+		return fmt.Errorf("resolve source path: %w", err)
+	}
+	if strings.HasPrefix(destAbs+string(filepath.Separator), srcAbsResolved+string(filepath.Separator)) {
+		return fmt.Errorf("cannot move a folder into itself or a subfolder")
+	}
+
+	// Check for name conflict
+	if _, err := os.Stat(destPath); err == nil {
+		return fmt.Errorf("a folder named '%s' already exists in the destination", baseName)
+	}
+
+	// Ensure destination parent exists
+	if err := os.MkdirAll(destParent, 0o755); err != nil {
+		return fmt.Errorf("create destination directory: %w", err)
+	}
+
+	if err := os.Rename(srcAbs, destPath); err != nil {
+		return fmt.Errorf("move folder: %w", err)
+	}
+
+	return w.Refresh()
+}
+
 // DeleteFile deletes a markdown file
 func (w *Workspace) DeleteFile(name string) error {
 	f := w.GetFile(name)
