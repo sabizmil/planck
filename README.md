@@ -5,6 +5,8 @@
 
 A terminal UI for AI-assisted planning and task management, orchestrating multiple agent sessions in a tabbed interface.
 
+<img width="1472" height="991" alt="Screenshot 2026-02-24 at 4 46 49 PM" src="https://github.com/user-attachments/assets/4a82d5df-77df-4e1b-86e8-53b4cf14009d" />
+
 ## Overview
 
 Planck is a TUI (Terminal User Interface) built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) that helps you:
