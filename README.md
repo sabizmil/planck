@@ -1,5 +1,3 @@
-<img width="501" height="501" alt="planck" src="https://github.com/user-attachments/assets/330c14e7-1397-4fdf-83ca-f4896ddf7a57" />
-
 # Planck
 
 
