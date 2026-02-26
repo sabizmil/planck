@@ -298,7 +298,7 @@ func TestEncodeDecodeArgs(t *testing.T) {
 			decoded := DecodeArgs(encoded)
 
 			// nil and empty both decode to nil
-			if tt.args == nil || len(tt.args) == 0 {
+			if len(tt.args) == 0 {
 				if decoded != nil {
 					t.Errorf("DecodeArgs(%q) = %v, want nil", encoded, decoded)
 				}

@@ -145,10 +145,10 @@ func (t *TmuxBackend) LaunchCommand(ctx context.Context, workDir, command string
 	}
 
 	// Set tmux options for this session
-	runTmux("set-option", "-t", tmuxName, "history-limit", "5000")     //nolint:errcheck
-	runTmux("set-option", "-t", tmuxName, "allow-passthrough", "on")   //nolint:errcheck
-	runTmux("set-option", "-t", tmuxName, "set-titles", "on")          //nolint:errcheck
-	runTmux("set-option", "-t", tmuxName, "remain-on-exit", "on")      //nolint:errcheck
+	runTmux("set-option", "-t", tmuxName, "history-limit", "5000")   //nolint:errcheck // best-effort session config
+	runTmux("set-option", "-t", tmuxName, "allow-passthrough", "on") //nolint:errcheck // best-effort session config
+	runTmux("set-option", "-t", tmuxName, "set-titles", "on")        //nolint:errcheck // best-effort session config
+	runTmux("set-option", "-t", tmuxName, "remain-on-exit", "on")    //nolint:errcheck // best-effort session config
 
 	tmuxSess := &TmuxSession{
 		id:       id,
@@ -202,7 +202,7 @@ func (s *TmuxSession) watchLoop() {
 				// Pane command has exited
 				exitCode := 0
 				if len(parts) >= 2 {
-					fmt.Sscanf(parts[1], "%d", &exitCode)
+					_, _ = fmt.Sscanf(parts[1], "%d", &exitCode)
 				}
 				s.mu.Lock()
 				if !s.exited {
@@ -466,7 +466,7 @@ func (t *TmuxBackend) ReattachSession(tmuxName, sessionID, workDir string) (*ses
 	if len(parts) >= 1 && parts[0] == "1" {
 		tmuxSess.exited = true
 		if len(parts) >= 2 {
-			fmt.Sscanf(parts[1], "%d", &tmuxSess.exitCode)
+			_, _ = fmt.Sscanf(parts[1], "%d", &tmuxSess.exitCode)
 		}
 		close(tmuxSess.done)
 		status = session.StatusCompleted

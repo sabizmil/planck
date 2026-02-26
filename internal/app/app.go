@@ -507,9 +507,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.fileList.ExitMoveMode()
 		return a, tea.Batch(cmds...)
 	}
-	if _, ok := msg.(ui.MoveCancelledMsg); ok {
+	if _, ok := msg.(ui.MoveCanceledMsg); ok {
 		a.fileList.ExitMoveMode()
-		a.message = "Move cancelled"
+		a.message = "Move canceled"
 		return a, tea.Batch(cmds...)
 	}
 

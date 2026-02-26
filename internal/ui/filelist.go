@@ -27,8 +27,8 @@ type MoveConfirmedMsg struct {
 	IsDir      bool   // whether the source is a directory
 }
 
-// MoveCancelledMsg is sent when the user cancels move mode.
-type MoveCancelledMsg struct{}
+// MoveCanceledMsg is sent when the user cancels move mode.
+type MoveCanceledMsg struct{}
 
 // treeNode represents a node in the file tree (either a directory or a file)
 type treeNode struct {
@@ -45,9 +45,9 @@ type treeNode struct {
 type ClickAction int
 
 const (
-	ClickNone    ClickAction = iota // click didn't hit any item
-	ClickFile                       // clicked a file node
-	ClickDirToggle                  // clicked a directory (toggled expand/collapse)
+	ClickNone      ClickAction = iota // click didn't hit any item
+	ClickFile                         // clicked a file node
+	ClickDirToggle                    // clicked a directory (toggled expand/collapse)
 )
 
 // FileList displays a list of markdown files as a collapsible tree
@@ -213,7 +213,7 @@ func (f *FileList) updateMoveMode(msg tea.KeyMsg) (*FileList, tea.Cmd) {
 
 	case "esc":
 		f.exitMoveMode()
-		return f, func() tea.Msg { return MoveCancelledMsg{} }
+		return f, func() tea.Msg { return MoveCanceledMsg{} }
 	}
 
 	return f, nil
@@ -515,13 +515,14 @@ func (f *FileList) viewMoveMode() string {
 			dirName := truncate(node.name, maxLen)
 
 			var line string
-			if isMoveSource {
+			switch {
+			case isMoveSource:
 				// Source item is dimmed
 				line = f.theme.Dimmed.PaddingLeft(1).Render(fmt.Sprintf(" %s%s %s", indent, arrow, dirName))
-			} else if isSelected {
+			case isSelected:
 				raw := fmt.Sprintf("%s%s%s %s", IndicatorSelected, indent, arrow, dirName)
 				line = f.theme.TreeSelected.Render(padToWidth(raw, contentWidth))
-			} else {
+			default:
 				line = f.theme.TreeItem.Render(fmt.Sprintf(" %s%s %s", indent, arrow, dirName))
 			}
 
