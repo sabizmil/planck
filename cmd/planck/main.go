@@ -1,16 +1,20 @@
 package main
 
 import (
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/sabizmil/planck/internal/app"
 	"github.com/sabizmil/planck/internal/config"
 	"github.com/sabizmil/planck/internal/session"
+	"github.com/sabizmil/planck/internal/tmux"
 	"github.com/sabizmil/planck/internal/updater"
 )
 
@@ -29,6 +33,9 @@ func main() {
 			return
 		case "version":
 			runVersion(os.Args[2:])
+			return
+		case "attach":
+			runAttach(os.Args[2:])
 			return
 		}
 	}
@@ -95,12 +102,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create PTY backend (per-agent args are handled at launch time)
-	backend := session.NewPTYBackend(
-		cfg.Preferences.TmuxPrefix,
-		cfg.SessionsDir(),
-		nil, // no global extra args; per-agent args passed at launch
-	)
+	// Create session backend based on configuration
+	backend, err := session.NewBackend(session.BackendConfig{
+		Backend:     cfg.Session.Backend,
+		Prefix:      cfg.Preferences.TmuxPrefix,
+		SessionsDir: cfg.SessionsDir(),
+		WorkDir:     folder,
+		ExtraArgs:   nil, // per-agent args passed at launch
+		TmuxFactory: func(prefix, sessionsDir, workDir string, extraArgs []string) session.InteractiveBackend {
+			return tmux.NewTmuxBackend(prefix, sessionsDir, workDir, extraArgs)
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating session backend: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Initialize and run the app
 	application, err := app.New(cfg, configDir, folder, backend)
@@ -185,6 +201,88 @@ func runVersion(args []string) {
 	}
 }
 
+func runAttach(args []string) {
+	fs := flag.NewFlagSet("attach", flag.ExitOnError)
+	folderFlag := fs.String("folder", "", "Working directory (default: current directory)")
+	fs.Parse(args) //nolint:errcheck // flag.ExitOnError handles parse errors
+
+	// Check tmux is available
+	if _, err := exec.LookPath("tmux"); err != nil {
+		fmt.Fprintln(os.Stderr, "Error: tmux is required for 'planck attach' but was not found in PATH.")
+		fmt.Fprintln(os.Stderr, "Install tmux: brew install tmux (macOS) or apt install tmux (Linux)")
+		os.Exit(1)
+	}
+
+	// Determine the working directory
+	folder := *folderFlag
+	if folder == "" {
+		var err error
+		folder, err = os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: cannot determine current directory: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		absPath, err := filepath.Abs(folder)
+		if err == nil {
+			folder = absPath
+		}
+	}
+
+	// Generate a tmux session name based on the folder path
+	// This ensures each project gets its own persistent session
+	h := sha256Short(folder)
+	tmuxSession := fmt.Sprintf("planck-%s", h)
+
+	// Check if session already exists
+	checkCmd := exec.Command("tmux", "has-session", "-t", tmuxSession)
+	if err := checkCmd.Run(); err == nil {
+		// Session exists — attach to it
+		fmt.Printf("Reattaching to existing planck session for %s\n", folder)
+		attachCmd := exec.Command("tmux", "attach-session", "-t", tmuxSession)
+		attachCmd.Stdin = os.Stdin
+		attachCmd.Stdout = os.Stdout
+		attachCmd.Stderr = os.Stderr
+		if err := attachCmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error attaching to tmux session: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Session doesn't exist — create it with planck running inside
+	planckBin, err := os.Executable()
+	if err != nil {
+		planckBin = "planck"
+	}
+	planckCmd := fmt.Sprintf("%s --folder %s", planckBin, quoteShellArg(folder))
+
+	fmt.Printf("Starting planck in persistent tmux session for %s\n", folder)
+	fmt.Printf("Session name: %s\n", tmuxSession)
+	fmt.Println("Detach with Ctrl+B d, reattach with: planck attach")
+
+	newCmd := exec.Command("tmux", "new-session", "-s", tmuxSession, "-c", folder, planckCmd)
+	newCmd.Stdin = os.Stdin
+	newCmd.Stdout = os.Stdout
+	newCmd.Stderr = os.Stderr
+	if err := newCmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating tmux session: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func sha256Short(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return fmt.Sprintf("%x", h[:4])
+}
+
+func quoteShellArg(s string) string {
+	if !strings.ContainsAny(s, " \t\n'\"\\$`!#&|;(){}[]<>?*~") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
 func getConfigDir() string {
 	// Use ~/.config/planck
 	home, err := os.UserHomeDir()
@@ -199,6 +297,7 @@ func printHelp() {
 
 Usage:
   planck [options]
+  planck attach [--folder PATH]
   planck update [--check]
   planck version [--check]
 
@@ -208,6 +307,8 @@ Options:
   -v, --version      Show version information
 
 Commands:
+  attach             Run planck inside a persistent tmux session (survives SSH disconnects)
+  attach --folder    Specify working directory for the attached session
   update             Download and install the latest version
   update --check     Check for updates without installing
   version            Show version information

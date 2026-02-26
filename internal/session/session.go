@@ -82,3 +82,36 @@ type Backend interface {
 	// Status returns the current status of a session
 	Status(handle string) (Status, error)
 }
+
+// InteractiveBackend extends Backend with methods needed for interactive
+// terminal sessions embedded in the TUI (PTY rendering, resize, input).
+type InteractiveBackend interface {
+	Backend
+
+	// LaunchCommand starts a session with a specific command and arguments.
+	// workDir is the working directory. If prompt is non-empty, it's passed
+	// to the agent via --system-prompt-file.
+	LaunchCommand(ctx context.Context, workDir, command string, args []string, prompt string) (*Session, error)
+
+	// Write sends raw bytes to the session (user keystrokes).
+	Write(handle string, data []byte) error
+
+	// Render returns the current terminal content with ANSI escape sequences.
+	Render(handle string) (string, error)
+
+	// Resize changes the terminal dimensions.
+	Resize(handle string, rows, cols uint16) error
+
+	// GetTitle returns the window title set by the child process.
+	GetTitle(handle string) string
+
+	// GetScrollback returns the scrollback buffer, or nil if scrollback
+	// is embedded in the Render() output (e.g., tmux backend).
+	GetScrollback(handle string) *ScrollbackBuffer
+
+	// GetExitCode returns the exit code of a completed session.
+	GetExitCode(handle string) (int, error)
+
+	// GetDoneChannel returns a channel that closes when the session exits.
+	GetDoneChannel(handle string) (<-chan struct{}, error)
+}

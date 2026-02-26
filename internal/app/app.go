@@ -69,7 +69,7 @@ type App struct {
 	// State management
 	store          *store.Store
 	workspace      *workspace.Workspace
-	sessionBackend *session.PTYBackend
+	sessionBackend session.InteractiveBackend
 
 	// UI components
 	theme    *ui.Theme
@@ -116,7 +116,7 @@ type App struct {
 }
 
 // New creates a new application
-func New(cfg *config.Config, configDir, folder string, backend *session.PTYBackend) (*App, error) {
+func New(cfg *config.Config, configDir, folder string, backend session.InteractiveBackend) (*App, error) {
 	// Open store
 	st, err := store.Open(cfg.StateDBPath())
 	if err != nil {
@@ -218,7 +218,13 @@ func (a *App) Init() tea.Cmd {
 
 	a.fileList.SetFocused(true)
 
-	return tea.Batch(a.watchForChanges(), a.refreshTick())
+	// Clean up old completed/failed sessions
+	a.cleanupOldSessions()
+
+	// Recover sessions from previous run (tmux backend only)
+	recoverCmd := a.recoverSessions()
+
+	return tea.Batch(a.watchForChanges(), a.refreshTick(), recoverCmd)
 }
 
 // watchForChanges creates a command that watches for file changes
@@ -476,6 +482,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if title := sanitizeTabTitle(msg.Title); title != "" && title != tab.customTitle {
 				tab.customTitle = title
 				a.syncTabBar()
+				// Persist title for recovery
+				if tab.session != nil {
+					_ = a.store.UpdateSessionTitle(tab.session.ID, title)
+				}
 			}
 			cmds = append(cmds, a.pollAgentTab(tab))
 		}
@@ -486,6 +496,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tab.panel.SetStatus("completed")
 			a.cleanupHookState(tab)
 			a.syncTabBar()
+			a.markSessionCompleted(msg.SessionID, msg.ExitCode)
 			a.message = fmt.Sprintf("%s completed (exit code: %d)", tab.baseLabel, msg.ExitCode)
 		}
 	}
@@ -905,6 +916,9 @@ func (a *App) launchAgentTab(agentKey string) tea.Cmd {
 		tab.panel.SetScrollback(sb)
 	}
 
+	// Persist session to SQLite for recovery
+	a.persistSession(tab)
+
 	// Show PTY panel and enter input mode
 	tab.panel.Show(agentKey, baseLabel, sess.ID)
 	tab.panel.EnterInputMode()
@@ -957,6 +971,7 @@ func (a *App) removeAgentTab(tab *AgentTab) {
 	// Kill session if running
 	if tab.session != nil {
 		_ = a.sessionBackend.Kill(tab.session.BackendHandle)
+		a.markSessionCanceled(tab.session.ID)
 	}
 
 	// Clean up hook state files
@@ -1178,11 +1193,23 @@ func (a *App) pollAgentTab(tab *AgentTab) tea.Cmd {
 	}
 }
 
-// killAllSessions kills all running agent sessions
+// killAllSessions kills all running agent sessions.
+// For tmux backend, sessions are left alive for recovery on next startup.
+// For PTY backend, sessions are killed since they can't survive without planck.
 func (a *App) killAllSessions() {
+	if a.isTmuxBackend() {
+		// Tmux sessions persist independently — just clean up UI state
+		for _, tab := range a.agentTabs {
+			a.cleanupHookState(tab)
+		}
+		return
+	}
+
+	// PTY backend: kill all sessions
 	for _, tab := range a.agentTabs {
 		if tab.session != nil {
 			_ = a.sessionBackend.Kill(tab.session.BackendHandle)
+			a.markSessionCanceled(tab.session.ID)
 		}
 		a.cleanupHookState(tab)
 	}

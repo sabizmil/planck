@@ -189,6 +189,199 @@ func TestSessionOperations(t *testing.T) {
 	}
 }
 
+func TestSessionExtendedFields(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	session := &Session{
+		ID:              "ext-1",
+		FilePath:        "/project",
+		Status:          "running",
+		StartedAt:       time.Now(),
+		AgentKey:        "claude-code",
+		AgentLabel:      "Claude",
+		CustomTitle:     "My Task",
+		TmuxSessionName: "planck-a3f2b1c4-d9e8f7a6",
+		BackendType:     "tmux",
+		WorkDir:         "/home/user/project",
+		Command:         "claude",
+		Args:            EncodeArgs([]string{"--dangerously-skip-permissions"}),
+	}
+
+	if err := store.SaveSession(session); err != nil {
+		t.Fatalf("SaveSession() error = %v", err)
+	}
+
+	got, err := store.GetSession("ext-1")
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if got.AgentKey != "claude-code" {
+		t.Errorf("AgentKey = %q, want %q", got.AgentKey, "claude-code")
+	}
+	if got.AgentLabel != "Claude" {
+		t.Errorf("AgentLabel = %q, want %q", got.AgentLabel, "Claude")
+	}
+	if got.CustomTitle != "My Task" {
+		t.Errorf("CustomTitle = %q, want %q", got.CustomTitle, "My Task")
+	}
+	if got.TmuxSessionName != "planck-a3f2b1c4-d9e8f7a6" {
+		t.Errorf("TmuxSessionName = %q, want %q", got.TmuxSessionName, "planck-a3f2b1c4-d9e8f7a6")
+	}
+	if got.BackendType != "tmux" {
+		t.Errorf("BackendType = %q, want %q", got.BackendType, "tmux")
+	}
+	if got.WorkDir != "/home/user/project" {
+		t.Errorf("WorkDir = %q, want %q", got.WorkDir, "/home/user/project")
+	}
+	if got.Command != "claude" {
+		t.Errorf("Command = %q, want %q", got.Command, "claude")
+	}
+
+	args := DecodeArgs(got.Args)
+	if len(args) != 1 || args[0] != "--dangerously-skip-permissions" {
+		t.Errorf("Args = %v, want [--dangerously-skip-permissions]", args)
+	}
+}
+
+func TestUpdateSessionTitle(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	session := &Session{
+		ID:        "title-1",
+		FilePath:  "/project",
+		Status:    "running",
+		StartedAt: time.Now(),
+	}
+	if err := store.SaveSession(session); err != nil {
+		t.Fatalf("SaveSession() error = %v", err)
+	}
+
+	if err := store.UpdateSessionTitle("title-1", "Updated Title"); err != nil {
+		t.Fatalf("UpdateSessionTitle() error = %v", err)
+	}
+
+	got, _ := store.GetSession("title-1")
+	if got.CustomTitle != "Updated Title" {
+		t.Errorf("CustomTitle = %q, want %q", got.CustomTitle, "Updated Title")
+	}
+}
+
+func TestEncodeDecodeArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"nil args", nil},
+		{"empty args", []string{}},
+		{"single arg", []string{"--verbose"}},
+		{"multiple args", []string{"--verbose", "--output-format", "json"}},
+		{"args with spaces", []string{"--prompt", "hello world"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded := EncodeArgs(tt.args)
+			decoded := DecodeArgs(encoded)
+
+			// nil and empty both decode to nil
+			if tt.args == nil || len(tt.args) == 0 {
+				if decoded != nil {
+					t.Errorf("DecodeArgs(%q) = %v, want nil", encoded, decoded)
+				}
+				return
+			}
+
+			if len(decoded) != len(tt.args) {
+				t.Errorf("DecodeArgs(%q) returned %d args, want %d", encoded, len(decoded), len(tt.args))
+				return
+			}
+			for i := range tt.args {
+				if decoded[i] != tt.args[i] {
+					t.Errorf("DecodeArgs(%q)[%d] = %q, want %q", encoded, i, decoded[i], tt.args[i])
+				}
+			}
+		})
+	}
+}
+
+func TestMigrateAddsNewColumns(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// First, create a database with only the base schema (no new columns)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	_, err = db.Exec(`CREATE TABLE sessions (
+		id TEXT PRIMARY KEY,
+		file_path TEXT NOT NULL,
+		status TEXT DEFAULT 'running',
+		started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		ended_at DATETIME,
+		exit_code INTEGER
+	)`)
+	if err != nil {
+		t.Fatalf("create base table error = %v", err)
+	}
+	// Insert a row with only base columns
+	_, err = db.Exec(`INSERT INTO sessions (id, file_path, status) VALUES ('old-1', '/old/path', 'running')`)
+	if err != nil {
+		t.Fatalf("insert base row error = %v", err)
+	}
+	db.Close()
+
+	// Now open with the store — migration should add new columns
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	// The old row should be readable with new columns defaulting to empty
+	got, err := store.GetSession("old-1")
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetSession() returned nil, expected old row to survive migration")
+	}
+	if got.AgentKey != "" {
+		t.Errorf("AgentKey = %q, want empty string (default)", got.AgentKey)
+	}
+	if got.BackendType != "" {
+		t.Errorf("BackendType = %q, want empty string (default)", got.BackendType)
+	}
+
+	// New rows should work with all columns
+	newSession := &Session{
+		ID:              "new-1",
+		FilePath:        "/project",
+		Status:          "running",
+		StartedAt:       time.Now(),
+		AgentKey:        "claude-code",
+		TmuxSessionName: "planck-test-123",
+		BackendType:     "tmux",
+	}
+	if err := store.SaveSession(newSession); err != nil {
+		t.Fatalf("SaveSession() error = %v", err)
+	}
+}
+
 // createOldSchemaDatabase creates a database with the old planck schema
 func createOldSchemaDatabase(path string) error {
 	// Ensure directory exists

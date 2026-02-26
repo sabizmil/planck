@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,16 @@ type Session struct {
 	StartedAt time.Time
 	EndedAt   *time.Time
 	ExitCode  *int
+
+	// Extended fields for session recovery
+	AgentKey        string // config key (e.g., "claude-code")
+	AgentLabel      string // display label (e.g., "Claude")
+	CustomTitle     string // title set by child process or user input
+	TmuxSessionName string // tmux session name for recovery
+	BackendType     string // "tmux" or "pty"
+	WorkDir         string // working directory
+	Command         string // command that was launched
+	Args            string // JSON-encoded arguments
 }
 
 // Open opens or creates the store database
@@ -93,7 +104,53 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	// Add new columns for session recovery (idempotent via IF NOT EXISTS check)
+	newColumns := []struct {
+		name string
+		def  string
+	}{
+		{"agent_key", "TEXT DEFAULT ''"},
+		{"agent_label", "TEXT DEFAULT ''"},
+		{"custom_title", "TEXT DEFAULT ''"},
+		{"tmux_session_name", "TEXT DEFAULT ''"},
+		{"backend_type", "TEXT DEFAULT ''"},
+		{"work_dir", "TEXT DEFAULT ''"},
+		{"command", "TEXT DEFAULT ''"},
+		{"args", "TEXT DEFAULT '[]'"},
+	}
+
+	for _, col := range newColumns {
+		if !s.hasColumn("sessions", col.name) {
+			if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE sessions ADD COLUMN %s %s", col.name, col.def)); err != nil {
+				return fmt.Errorf("add column %s: %w", col.name, err)
+			}
+		}
+	}
+
 	return nil
+}
+
+// hasColumn checks if a table has a specific column
+func (s *Store) hasColumn(table, column string) bool {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt interface{}
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			continue
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
 }
 
 // migrateFromOldSchema handles migration from the old planck schema
@@ -147,13 +204,18 @@ func (s *Store) migrateFromOldSchema() error {
 // SaveSession saves or updates a session
 func (s *Store) SaveSession(session *Session) error {
 	_, err := s.db.Exec(`
-		INSERT INTO sessions (id, file_path, status, started_at, ended_at, exit_code)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO sessions (id, file_path, status, started_at, ended_at, exit_code,
+			agent_key, agent_label, custom_title, tmux_session_name, backend_type, work_dir, command, args)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status = excluded.status,
 			ended_at = excluded.ended_at,
-			exit_code = excluded.exit_code
-	`, session.ID, session.FilePath, session.Status, session.StartedAt, session.EndedAt, session.ExitCode)
+			exit_code = excluded.exit_code,
+			custom_title = excluded.custom_title,
+			tmux_session_name = excluded.tmux_session_name
+	`, session.ID, session.FilePath, session.Status, session.StartedAt, session.EndedAt, session.ExitCode,
+		session.AgentKey, session.AgentLabel, session.CustomTitle, session.TmuxSessionName,
+		session.BackendType, session.WorkDir, session.Command, session.Args)
 	return err
 }
 
@@ -161,9 +223,15 @@ func (s *Store) SaveSession(session *Session) error {
 func (s *Store) GetSession(id string) (*Session, error) {
 	var session Session
 	err := s.db.QueryRow(`
-		SELECT id, file_path, status, started_at, ended_at, exit_code
+		SELECT id, file_path, status, started_at, ended_at, exit_code,
+			COALESCE(agent_key, ''), COALESCE(agent_label, ''),
+			COALESCE(custom_title, ''), COALESCE(tmux_session_name, ''),
+			COALESCE(backend_type, ''), COALESCE(work_dir, ''),
+			COALESCE(command, ''), COALESCE(args, '[]')
 		FROM sessions WHERE id = ?
-	`, id).Scan(&session.ID, &session.FilePath, &session.Status, &session.StartedAt, &session.EndedAt, &session.ExitCode)
+	`, id).Scan(&session.ID, &session.FilePath, &session.Status, &session.StartedAt, &session.EndedAt, &session.ExitCode,
+		&session.AgentKey, &session.AgentLabel, &session.CustomTitle, &session.TmuxSessionName,
+		&session.BackendType, &session.WorkDir, &session.Command, &session.Args)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -175,14 +243,19 @@ func (s *Store) GetSession(id string) (*Session, error) {
 
 // ListSessions returns sessions, optionally filtered by status
 func (s *Store) ListSessions(status string) ([]*Session, error) {
-	query := "SELECT id, file_path, status, started_at, ended_at, exit_code FROM sessions WHERE 1=1"
+	query := `SELECT id, file_path, status, started_at, ended_at, exit_code,
+		COALESCE(agent_key, ''), COALESCE(agent_label, ''),
+		COALESCE(custom_title, ''), COALESCE(tmux_session_name, ''),
+		COALESCE(backend_type, ''), COALESCE(work_dir, ''),
+		COALESCE(command, ''), COALESCE(args, '[]')
+		FROM sessions WHERE 1=1`
 	args := []interface{}{}
 
 	if status != "" {
 		query += " AND status = ?"
 		args = append(args, status)
 	}
-	query += " ORDER BY started_at DESC"
+	query += " ORDER BY started_at ASC"
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -193,7 +266,9 @@ func (s *Store) ListSessions(status string) ([]*Session, error) {
 	var sessions []*Session
 	for rows.Next() {
 		var session Session
-		if err := rows.Scan(&session.ID, &session.FilePath, &session.Status, &session.StartedAt, &session.EndedAt, &session.ExitCode); err != nil {
+		if err := rows.Scan(&session.ID, &session.FilePath, &session.Status, &session.StartedAt, &session.EndedAt, &session.ExitCode,
+			&session.AgentKey, &session.AgentLabel, &session.CustomTitle, &session.TmuxSessionName,
+			&session.BackendType, &session.WorkDir, &session.Command, &session.Args); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, &session)
@@ -218,6 +293,12 @@ func (s *Store) UpdateSessionStatus(id, status string, exitCode *int) error {
 	return err
 }
 
+// UpdateSessionTitle updates just the custom title of a session
+func (s *Store) UpdateSessionTitle(id, title string) error {
+	_, err := s.db.Exec(`UPDATE sessions SET custom_title = ? WHERE id = ?`, title, id)
+	return err
+}
+
 // DeleteSession deletes a session
 func (s *Store) DeleteSession(id string) error {
 	_, err := s.db.Exec("DELETE FROM sessions WHERE id = ?", id)
@@ -231,4 +312,25 @@ func (s *Store) CleanupOldSessions(olderThan time.Duration) error {
 		DELETE FROM sessions WHERE status != 'running' AND started_at < ?
 	`, cutoff)
 	return err
+}
+
+// EncodeArgs serializes arguments to JSON for storage.
+func EncodeArgs(args []string) string {
+	data, err := json.Marshal(args)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+// DecodeArgs deserializes JSON arguments from storage.
+func DecodeArgs(s string) []string {
+	if s == "" || s == "[]" {
+		return nil
+	}
+	var args []string
+	if err := json.Unmarshal([]byte(s), &args); err != nil {
+		return nil
+	}
+	return args
 }
