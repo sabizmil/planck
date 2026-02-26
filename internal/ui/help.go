@@ -101,8 +101,10 @@ func (h *Help) renderHelpContent() string {
 	sb.WriteString(h.theme.Title.Render("Global"))
 	sb.WriteString("\n")
 	sb.WriteString(h.renderKeySection([][]string{
-		{"Tab / Shift+Tab", "Cycle through tabs"},
-		{"1-9", "Jump to tab by number"},
+		{"Shift+Tab", "Next tab"},
+		{"Alt+1-9", "Jump to tab by number"},
+		{"Click tab", "Switch to tab"},
+		{"1-9", "Jump to tab (normal mode)"},
 		{"a", "Create new agent tab"},
 		{"x / Ctrl+X", "Close current agent tab"},
 		{"s", "Settings"},
@@ -142,10 +144,12 @@ func (h *Help) renderHelpContent() string {
 	sb.WriteString(h.theme.Title.Render("Agent Tab (Input Mode)"))
 	sb.WriteString("\n")
 	sb.WriteString(h.renderKeySection([][]string{
+		{"Tab", "Sent to agent (autocomplete)"},
+		{"Shift+Tab", "Next tab"},
+		{"Alt+1-9", "Jump to tab"},
 		{"Ctrl+\\", "Exit to normal mode"},
 		{"Ctrl+X", "Close tab"},
 		{"Scroll", "Browse output history"},
-		{"Tab / Shift+Tab", "Cycle tabs"},
 	}))
 	sb.WriteString("\n")
 

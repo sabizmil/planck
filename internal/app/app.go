@@ -570,8 +570,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	}
 
-	// Handle mouse events on planning tab (and drag release anywhere)
+	// Handle mouse events
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		me := tea.MouseEvent(mouseMsg)
+		// Tab bar click: left click on row 0 switches tabs (works on all tabs)
+		if mouseMsg.Y == 0 && mouseMsg.Button == tea.MouseButtonLeft && me.Action == tea.MouseActionPress {
+			if idx := a.tabs.HitTest(mouseMsg.X); idx >= 0 {
+				cmd := a.switchToTab(idx)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return a, tea.Batch(cmds...)
+			}
+		}
+		// Planning tab mouse events (sidebar drag, editor clicks)
 		if a.isOnPlanningTab() || a.draggingSidebar {
 			a.handlePlanningMouse(mouseMsg)
 			return a, tea.Batch(cmds...)
@@ -659,17 +671,9 @@ func (a *App) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 		a.quitting = true
 		return tea.Quit
 
-	case "tab":
-		if a.editor.Mode() == ui.EditorModeEdit {
-			return nil
-		}
-		return a.cycleTab(1)
-
 	case "shift+tab":
-		if a.editor.Mode() == ui.EditorModeEdit {
-			return nil
-		}
-		return a.cycleTab(-1)
+		// Shift+Tab cycles forward through tabs — works globally (even in input mode)
+		return a.cycleTab(1)
 
 	case "ctrl+x":
 		// Close agent tab — works even in input mode
@@ -714,7 +718,13 @@ func (a *App) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 		return a.closeCurrentAgentTab()
 	}
 
-	// Number keys 1-9 for tab switching
+	// Alt+1-9 for tab switching — works in all modes (including input mode)
+	if key >= "alt+1" && key <= "alt+9" {
+		idx := int(key[len(key)-1]-'0') - 1 // "alt+1" → 0, "alt+2" → 1, etc.
+		return a.switchToTab(idx)
+	}
+
+	// Number keys 1-9 for tab switching (normal mode only)
 	if key >= "1" && key <= "9" {
 		if a.editor.Mode() == ui.EditorModeEdit {
 			return nil
@@ -1501,14 +1511,14 @@ func (a *App) renderStatusBar() string {
 			if a.editor.Mode() == ui.EditorModeEdit {
 				leftContent = a.theme.KeyHint.Render("[Esc] save & exit  [Ctrl+S] save")
 			} else {
-				leftContent = a.theme.KeyHint.Render("[^|v] navigate  [e] edit  [n] new  [d] delete  [r] refresh  [a] agent  [s] settings  [Tab] cycle")
+				leftContent = a.theme.KeyHint.Render("[^|v] navigate  [e] edit  [n] new  [d] delete  [r] refresh  [a] agent  [s] settings  [Shift+Tab] next tab")
 			}
 		} else {
 			panel := a.activePanel()
 			if panel != nil && panel.IsInputMode() {
-				leftContent = a.theme.KeyHint.Render("[Ctrl+\\] normal  [Ctrl+X] close  [Tab] cycle  [scroll] scrollback")
+				leftContent = a.theme.KeyHint.Render("[Ctrl+\\] normal  [Ctrl+X] close  [Shift+Tab] next tab  [scroll] scrollback")
 			} else {
-				leftContent = a.theme.KeyHint.Render("[i] interact  [a] new agent  [x] close  [Tab] cycle")
+				leftContent = a.theme.KeyHint.Render("[i] interact  [a] new agent  [x] close  [Shift+Tab] next tab")
 			}
 		}
 	}

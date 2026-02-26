@@ -24,8 +24,10 @@ var keybindingContexts = []keybindingContext{
 	{
 		Name: "Global",
 		Bindings: []keybindingEntry{
-			{"Tab / Shift+Tab", "Cycle through tabs"},
-			{"1-9", "Jump to tab by number"},
+			{"Shift+Tab", "Next tab"},
+			{"Alt+1-9", "Jump to tab by number"},
+			{"Click tab", "Switch to tab"},
+			{"1-9", "Jump to tab (normal mode)"},
 			{"a", "Create new agent tab"},
 			{"x / Ctrl+X", "Close agent tab"},
 			{"s", "Settings"},
@@ -58,10 +60,12 @@ var keybindingContexts = []keybindingContext{
 	{
 		Name: "Agent (Input)",
 		Bindings: []keybindingEntry{
+			{"Tab", "Sent to agent"},
+			{"Shift+Tab", "Next tab"},
+			{"Alt+1-9", "Jump to tab"},
 			{"Ctrl+\\", "Normal mode"},
 			{"Ctrl+X", "Close tab"},
 			{"Scroll", "Browse scrollback"},
-			{"Tab / Shift+Tab", "Cycle tabs"},
 		},
 	},
 	{

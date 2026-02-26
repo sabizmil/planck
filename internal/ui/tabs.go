@@ -213,3 +213,35 @@ func (t *TabBar) SetFolderPath(path string) {
 func (t *TabBar) SetWidth(width int) {
 	t.width = width
 }
+
+// HitTest returns the tab index at the given X coordinate, or -1 if none.
+// This mirrors the layout logic in View() to compute tab positions.
+func (t *TabBar) HitTest(x int) int {
+	pos := 0
+	for i, tab := range t.tabs {
+		if i > 0 {
+			pos += 2 // gap between tabs
+		}
+
+		label := tab.Label
+		switch {
+		case tab.Status == "needs_input" && i > 0:
+			label = IndicatorActive + " " + label
+		case (tab.Status == "completed" || tab.Status == "idle") && i > 0:
+			label = IndicatorDone + " " + label
+		case tab.Status == "running" && i > 0:
+			label = t.spinnerFrames[t.spinnerFrame%len(t.spinnerFrames)] + " " + label
+		}
+
+		numLabel := fmt.Sprintf("%d:%s", i+1, label)
+		// Tab visual width: "[" + 2 padding + content + 2 padding + "]"
+		contentWidth := lipgloss.Width(numLabel)
+		tabWidth := 1 + 2 + contentWidth + 2 + 1 // brackets + padding + content
+
+		if x >= pos && x < pos+tabWidth {
+			return i
+		}
+		pos += tabWidth
+	}
+	return -1
+}
