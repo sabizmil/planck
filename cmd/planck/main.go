@@ -24,20 +24,62 @@ var (
 	buildTime = "unknown"
 )
 
-func main() {
-	// Handle subcommands before flag parsing
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "update":
-			runUpdate(os.Args[2:])
-			return
-		case "version":
-			runVersion(os.Args[2:])
-			return
-		case "attach":
-			runAttach(os.Args[2:])
-			return
+// knownSubcommands lists all valid subcommand names.
+var knownSubcommands = map[string]bool{
+	"update":  true,
+	"version": true,
+	"attach":  true,
+}
+
+// findSubcommand scans os.Args for a subcommand, skipping flags and their values.
+// Returns the subcommand name, the remaining args after it, and whether one was found.
+func findSubcommand(args []string) (cmd string, rest []string, found bool) {
+	// Flags that take a value argument (must skip the next arg too)
+	valuedFlags := map[string]bool{
+		"-folder": true, "--folder": true,
+		"-f": true,
+	}
+
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+
+		// Skip flags
+		if strings.HasPrefix(arg, "-") {
+			// If this flag takes a value, skip the next arg too
+			if valuedFlags[arg] {
+				i++ // skip the value
+			} else if strings.Contains(arg, "=") {
+				// --flag=value form, already consumed
+				continue
+			}
+			continue
 		}
+
+		// First non-flag argument — check if it's a subcommand
+		if knownSubcommands[arg] {
+			// Only pass args that appear after the subcommand
+			rest = args[i+1:]
+			return arg, rest, true
+		}
+
+		// Non-flag, non-subcommand argument — stop scanning
+		break
+	}
+	return "", nil, false
+}
+
+func main() {
+	// Handle subcommands — scan all args, not just os.Args[1]
+	if cmd, rest, found := findSubcommand(os.Args); found {
+		switch cmd {
+		case "update":
+			runUpdate(rest)
+		case "version":
+			runVersion(rest)
+		case "attach":
+			runAttach(rest)
+		}
+		return
 	}
 
 	// Define flags
@@ -46,10 +88,23 @@ func main() {
 	helpFlag := flag.Bool("help", false, "Show help")
 
 	// Short versions
+	flag.StringVar(folderFlag, "f", "", "Folder containing markdown files")
 	flag.BoolVar(versionFlag, "v", false, "Show version information")
 	flag.BoolVar(helpFlag, "h", false, "Show help")
 
 	flag.Parse()
+
+	// Reject unexpected positional arguments
+	if flag.NArg() > 0 {
+		arg := flag.Arg(0)
+		if knownSubcommands[arg] {
+			fmt.Fprintf(os.Stderr, "Error: unknown position for command %q. Usage: planck %s [options]\n", arg, arg)
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: unexpected argument %q\n", arg)
+			fmt.Fprintln(os.Stderr, "Run 'planck --help' for usage information.")
+		}
+		os.Exit(1)
+	}
 
 	if *versionFlag {
 		fmt.Printf("planck %s (commit: %s, built: %s)\n", version, commit, buildTime)
@@ -315,29 +370,38 @@ Commands:
   version --check    Show version and check for updates
 
 Keybindings (Global):
-  Tab         Cycle through tabs
-  1-9         Jump to tab by number
-  a           Create new agent tab
-  x / Ctrl+X  Close current agent tab
-  ?           Toggle help
-  q           Quit
+  Shift+Tab    Next tab
+  Alt+1-9      Jump to tab by number (all modes)
+  1-9          Jump to tab by number (normal mode)
+  a            Create new agent tab
+  x / Ctrl+X   Close current agent tab
+  s            Settings
+  ?            Toggle help
+  q            Quit
 
 Keybindings (Planning Tab):
   ↑/↓, j/k    Navigate files
-  Enter       Open file in editor
-  e           Edit file
-  n           New file
-  d           Delete file
+  Enter        Open file in editor
+  e            Enter edit mode
+  n            New file
+  d            Delete file/folder
+  c            Toggle completion
+  m            Move/rename file or folder
+  r            Refresh file list
+  h/l          Collapse/expand folders
 
 Keybindings (Agent Tab - Input Mode):
-  Ctrl+\      Exit to normal mode
-  Ctrl+X      Close tab
-  Scroll      Browse output history
+  Ctrl+\       Exit to normal mode
+  Tab          Sent to agent (autocomplete)
+  Ctrl+X       Close tab
+  Scroll       Browse output history
 
 Keybindings (Agent Tab - Normal Mode):
-  i / Enter   Enter input mode
-  x           Close tab
-  a           New agent tab
+  i / Enter    Enter input mode
+  j/k          Scroll up/down
+  g/G          Jump to top/bottom
+  x            Close tab
+  a            New agent tab
 
 For more information, visit: https://github.com/sabizmil/planck`)
 }
