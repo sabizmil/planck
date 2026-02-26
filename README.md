@@ -1,4 +1,7 @@
+<img width="501" height="501" alt="planck" src="https://github.com/user-attachments/assets/330c14e7-1397-4fdf-83ca-f4896ddf7a57" />
+
 # Planck
+
 
 [![CI](https://github.com/sabizmil/planck/actions/workflows/ci.yml/badge.svg)](https://github.com/sabizmil/planck/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
