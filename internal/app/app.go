@@ -113,10 +113,13 @@ type App struct {
 
 	// Sidebar drag-resize state
 	draggingSidebar bool
+
+	// Build version (e.g. "v1.2.3" or "dev" for local builds)
+	version string
 }
 
 // New creates a new application
-func New(cfg *config.Config, configDir, folder string, backend session.InteractiveBackend) (*App, error) {
+func New(cfg *config.Config, configDir, folder string, backend session.InteractiveBackend, version string) (*App, error) {
 	// Open store
 	st, err := store.Open(cfg.StateDBPath())
 	if err != nil {
@@ -187,6 +190,7 @@ func New(cfg *config.Config, configDir, folder string, backend session.Interacti
 		focus:           FocusFileList,
 		sidebarWidth:    sidebarWidth,
 		nextInstanceNum: make(map[string]int),
+		version:         version,
 	}
 
 	// Apply configured spinner style to tab bar
@@ -1629,8 +1633,14 @@ func (a *App) renderStatusBar() string {
 		}
 	}
 
-	// Right side: help hint
-	rightContent := a.theme.Dimmed.Render("[?] help  [q] quit")
+	// Right side: help hint + version
+	var versionLabel string
+	if a.version == "dev" {
+		versionLabel = a.theme.VersionDev.Render("dev")
+	} else {
+		versionLabel = a.theme.Dimmed.Render(a.version)
+	}
+	rightContent := a.theme.Dimmed.Render("[?] help  [q] quit") + "  " + versionLabel
 
 	// Calculate spacing
 	leftWidth := lipgloss.Width(leftContent)

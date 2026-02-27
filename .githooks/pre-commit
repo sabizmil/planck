@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Pre-commit hook: auto-fix formatting and run lint on staged .go files.
+# Install with: make setup
+
+set -euo pipefail
+
+# Get staged .go files (excluding deleted files)
+STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=d -- '*.go' || true)
+
+if [ -z "$STAGED_GO_FILES" ]; then
+    exit 0
+fi
+
+# --- Auto-fix formatting ---
+
+# gofmt
+if command -v gofmt >/dev/null 2>&1; then
+    for file in $STAGED_GO_FILES; do
+        if [ -f "$file" ]; then
+            gofmt -w "$file"
+            git add "$file"
+        fi
+    done
+fi
+
+# goimports
+if command -v goimports >/dev/null 2>&1; then
+    for file in $STAGED_GO_FILES; do
+        if [ -f "$file" ]; then
+            goimports -w "$file"
+            git add "$file"
+        fi
+    done
+fi
+
+# --- Run golangci-lint on staged files ---
+
+if ! command -v golangci-lint >/dev/null 2>&1; then
+    # Check in GOPATH/bin as fallback
+    GOBIN="${GOPATH:-$HOME/go}/bin"
+    if [ -x "$GOBIN/golangci-lint" ]; then
+        export PATH="$GOBIN:$PATH"
+    else
+        echo "warning: golangci-lint not found, skipping lint check"
+        echo "  Install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"
+        exit 0
+    fi
+fi
+
+# Collect unique package directories from staged files
+PACKAGES=""
+for file in $STAGED_GO_FILES; do
+    dir=$(dirname "$file")
+    PACKAGES="$PACKAGES ./$dir"
+done
+PACKAGES=$(echo "$PACKAGES" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+
+echo "Running golangci-lint on staged packages..."
+if ! golangci-lint run $PACKAGES; then
+    echo ""
+    echo "Lint errors found. Please fix them before committing."
+    echo "Run 'make lint' to see all issues."
+    exit 1
+fi
+
+exit 0

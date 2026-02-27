@@ -44,6 +44,9 @@ type Theme struct {
 	Dialog          lipgloss.Style
 	DialogTitle     lipgloss.Style
 
+	// Version display
+	VersionDev lipgloss.Style
+
 	// Stream event styles
 	ThinkingBlock  lipgloss.Style
 	ToolUseCard    lipgloss.Style
@@ -161,6 +164,10 @@ func DefaultTheme() *Theme {
 			BorderTop(true).
 			BorderForeground(dimmed),
 
+		VersionDev: lipgloss.NewStyle().
+			Foreground(warning).
+			Bold(true),
+
 		Dialog: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(accent).
@@ -229,6 +236,7 @@ func noColorTheme() *Theme {
 		TreeSelected:    lipgloss.NewStyle().Bold(true).Reverse(true),
 		DetailPanel:     lipgloss.NewStyle().PaddingLeft(2),
 		StatusBar:       lipgloss.NewStyle(),
+		VersionDev:      lipgloss.NewStyle().Bold(true),
 		Dialog:          lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2),
 		DialogTitle:     lipgloss.NewStyle().Bold(true),
 		ThinkingBlock:   lipgloss.NewStyle().Italic(true).Border(lipgloss.RoundedBorder()).Padding(0, 1),

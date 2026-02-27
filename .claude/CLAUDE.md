@@ -13,6 +13,7 @@ Planck is a terminal UI (TUI) application for AI-assisted planning and task mana
 ## Build & Test Commands
 
 ```bash
+make setup          # Set up dev environment (git hooks)
 make build          # Build binary to build/planck
 make test           # Run all tests with race detector
 make test-short     # Run short tests (no integration)
@@ -22,6 +23,19 @@ make fmt            # Format code (go fmt + goimports)
 make run            # Build and run
 make dev            # Hot reload with air
 ```
+
+## Lint Automation
+
+Lint errors are caught automatically at two levels:
+
+### Git Pre-Commit Hook (`.githooks/pre-commit`)
+- Auto-fixes `gofmt` and `goimports` on staged `.go` files and re-stages them
+- Runs `golangci-lint` on staged packages and blocks the commit on failure
+- Activate with `make setup` (sets `core.hooksPath=.githooks`)
+
+### Claude Code Hooks (`.claude/settings.json`)
+- **PostToolUse (Edit|Write):** Runs `gofmt` + `goimports` on `.go` files immediately after editing, keeping formatting clean in real time
+- **PreToolUse (Bash):** Intercepts `git commit`/`git push` commands, runs `golangci-lint`, and blocks with exit code 2 on failure — feeding lint errors back to Claude for self-correction
 
 ## Plan Lifecycle
 

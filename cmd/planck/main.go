@@ -174,7 +174,7 @@ func main() {
 	}
 
 	// Initialize and run the app
-	application, err := app.New(cfg, configDir, folder, backend)
+	application, err := app.New(cfg, configDir, folder, backend, version)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing app: %v\n", err)
 		os.Exit(1)

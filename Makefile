@@ -117,6 +117,12 @@ dev:
 		$(MAKE) run; \
 	fi
 
+# Set up development environment (git hooks, etc.)
+.PHONY: setup
+setup:
+	git config core.hooksPath .githooks
+	@echo "Git hooks installed from .githooks/"
+
 # Check for required tools
 .PHONY: check-tools
 check-tools:
@@ -164,6 +170,7 @@ help:
 	@echo "  make tidy         Tidy dependencies"
 	@echo "  make run          Build and run"
 	@echo "  make dev          Run with hot reload (requires air)"
+	@echo "  make setup        Set up dev environment (git hooks)"
 	@echo "  make clean        Clean build artifacts"
 	@echo "  make release      Create release (requires goreleaser)"
 	@echo "  make help         Show this help"

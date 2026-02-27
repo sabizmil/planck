@@ -241,6 +241,7 @@ planck/
 ## Development
 
 ```bash
+make setup          # Set up dev environment (git hooks)
 make build          # Build binary to build/planck
 make test           # Run all tests with race detector
 make test-short     # Run short tests (skip integration)
@@ -251,6 +252,8 @@ make run            # Build and run
 make dev            # Hot reload with air
 make build-all      # Cross-platform binaries (darwin/linux, amd64/arm64)
 ```
+
+Run `make setup` after cloning to install the pre-commit hook, which auto-formats Go files and runs lint before each commit.
 
 ## License
 
