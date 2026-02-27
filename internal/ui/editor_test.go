@@ -459,7 +459,6 @@ func TestEditor_SelectedText_MultiLine(t *testing.T) {
 func TestEditor_ClearSelection(t *testing.T) {
 	e := newTestEditor("hello")
 	e.hasSelection = true
-	e.selecting = true
 	e.selAnchorRow = 0
 	e.selAnchorCol = 1
 
@@ -467,9 +466,6 @@ func TestEditor_ClearSelection(t *testing.T) {
 
 	if e.hasSelection {
 		t.Error("expected hasSelection to be false")
-	}
-	if e.selecting {
-		t.Error("expected selecting to be false")
 	}
 }
 
@@ -512,14 +508,540 @@ func TestEditor_RenderWithSelection_WrappedLines(t *testing.T) {
 func TestEditor_SetContent_ClearsSelection(t *testing.T) {
 	e := newTestEditor("hello")
 	e.hasSelection = true
-	e.selecting = true
 
 	e.SetContent("new.md", "new content")
 
 	if e.hasSelection {
 		t.Error("SetContent should clear selection")
 	}
-	if e.selecting {
-		t.Error("SetContent should clear selecting state")
+}
+
+// --- Word Boundary tests ---
+
+func TestWordBoundaryLeft(t *testing.T) {
+	tests := []struct {
+		name      string
+		content   string
+		startRow  int
+		startCol  int
+		wantRow   int
+		wantCol   int
+	}{
+		{
+			name:     "middle of word",
+			content:  "hello world",
+			startRow: 0, startCol: 8,
+			wantRow: 0, wantCol: 6,
+		},
+		{
+			name:     "start of second word",
+			content:  "hello world",
+			startRow: 0, startCol: 6,
+			wantRow: 0, wantCol: 0,
+		},
+		{
+			name:     "start of line",
+			content:  "hello\nworld",
+			startRow: 1, startCol: 0,
+			wantRow: 0, wantCol: 0,
+		},
+		{
+			name:     "start of file",
+			content:  "hello",
+			startRow: 0, startCol: 0,
+			wantRow: 0, wantCol: 0,
+		},
+		{
+			name:     "multiple spaces",
+			content:  "hello   world",
+			startRow: 0, startCol: 10,
+			wantRow: 0, wantCol: 8,
+		},
+		{
+			name:     "punctuation between words",
+			content:  "hello.world",
+			startRow: 0, startCol: 11,
+			wantRow: 0, wantCol: 6,
+		},
+		{
+			name:     "wrap to previous line",
+			content:  "first line\nsecond line",
+			startRow: 1, startCol: 0,
+			wantRow: 0, wantCol: 6,
+		},
+		{
+			name:     "end of line",
+			content:  "hello world",
+			startRow: 0, startCol: 11,
+			wantRow: 0, wantCol: 6,
+		},
+		{
+			name:     "empty lines",
+			content:  "hello\n\nworld",
+			startRow: 2, startCol: 0,
+			wantRow: 0, wantCol: 0,
+		},
+		{
+			name:     "only spaces on line wrap",
+			content:  "hello\n   \nworld",
+			startRow: 2, startCol: 0,
+			wantRow: 0, wantCol: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEditor(tc.content)
+			gotRow, gotCol := e.wordBoundaryLeft(tc.startRow, tc.startCol)
+			if gotRow != tc.wantRow || gotCol != tc.wantCol {
+				t.Errorf("wordBoundaryLeft(%d,%d) = (%d,%d), want (%d,%d)",
+					tc.startRow, tc.startCol, gotRow, gotCol, tc.wantRow, tc.wantCol)
+			}
+		})
+	}
+}
+
+func TestWordBoundaryRight(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		startRow int
+		startCol int
+		wantRow  int
+		wantCol  int
+	}{
+		{
+			name:     "middle of word",
+			content:  "hello world",
+			startRow: 0, startCol: 2,
+			wantRow: 0, wantCol: 6,
+		},
+		{
+			name:     "start of first word",
+			content:  "hello world",
+			startRow: 0, startCol: 0,
+			wantRow: 0, wantCol: 6,
+		},
+		{
+			name:     "end of line wraps to next and skips word",
+			content:  "hello\nworld",
+			startRow: 0, startCol: 5,
+			wantRow: 1, wantCol: 5,
+		},
+		{
+			name:     "end of file stays put",
+			content:  "hello",
+			startRow: 0, startCol: 5,
+			wantRow: 0, wantCol: 5,
+		},
+		{
+			name:     "multiple spaces",
+			content:  "hello   world",
+			startRow: 0, startCol: 0,
+			wantRow: 0, wantCol: 8,
+		},
+		{
+			name:     "punctuation between words",
+			content:  "hello.world",
+			startRow: 0, startCol: 0,
+			wantRow: 0, wantCol: 6,
+		},
+		{
+			name:     "already at start of word",
+			content:  "hello world foo",
+			startRow: 0, startCol: 6,
+			wantRow: 0, wantCol: 12,
+		},
+		{
+			name:     "empty lines",
+			content:  "hello\n\nworld",
+			startRow: 0, startCol: 5,
+			wantRow: 1, wantCol: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEditor(tc.content)
+			gotRow, gotCol := e.wordBoundaryRight(tc.startRow, tc.startCol)
+			if gotRow != tc.wantRow || gotCol != tc.wantCol {
+				t.Errorf("wordBoundaryRight(%d,%d) = (%d,%d), want (%d,%d)",
+					tc.startRow, tc.startCol, gotRow, gotCol, tc.wantRow, tc.wantCol)
+			}
+		})
+	}
+}
+
+func TestIsWordChar(t *testing.T) {
+	tests := []struct {
+		ch   byte
+		want bool
+	}{
+		{'a', true}, {'z', true}, {'A', true}, {'Z', true},
+		{'0', true}, {'9', true}, {'_', true},
+		{' ', false}, {'.', false}, {',', false}, {'-', false},
+		{'(', false}, {')', false}, {'\t', false}, {'\n', false},
+	}
+
+	for _, tc := range tests {
+		got := isWordChar(tc.ch)
+		if got != tc.want {
+			t.Errorf("isWordChar(%q) = %v, want %v", tc.ch, got, tc.want)
+		}
+	}
+}
+
+// --- Shift+Arrow selection tests ---
+
+func TestEditor_ShiftRight_StartsSelection(t *testing.T) {
+	e := newTestEditor("hello world")
+	e.cursorRow = 0
+	e.cursorCol = 0
+
+	// Simulate Shift+Right
+	fromRow, fromCol := e.cursorRow, e.cursorCol
+	e.moveCursorRight()
+	e.extendSelection(fromRow, fromCol)
+
+	if !e.hasSelection {
+		t.Fatal("expected hasSelection to be true")
+	}
+	if e.selAnchorRow != 0 || e.selAnchorCol != 0 {
+		t.Errorf("expected anchor at (0,0), got (%d,%d)", e.selAnchorRow, e.selAnchorCol)
+	}
+	if e.selEndRow != 0 || e.selEndCol != 1 {
+		t.Errorf("expected end at (0,1), got (%d,%d)", e.selEndRow, e.selEndCol)
+	}
+}
+
+func TestEditor_ShiftLeft_StartsSelection(t *testing.T) {
+	e := newTestEditor("hello world")
+	e.cursorRow = 0
+	e.cursorCol = 5
+
+	fromRow, fromCol := e.cursorRow, e.cursorCol
+	e.moveCursorLeft()
+	e.extendSelection(fromRow, fromCol)
+
+	if !e.hasSelection {
+		t.Fatal("expected hasSelection to be true")
+	}
+	if e.selAnchorRow != 0 || e.selAnchorCol != 5 {
+		t.Errorf("expected anchor at (0,5), got (%d,%d)", e.selAnchorRow, e.selAnchorCol)
+	}
+	if e.selEndRow != 0 || e.selEndCol != 4 {
+		t.Errorf("expected end at (0,4), got (%d,%d)", e.selEndRow, e.selEndCol)
+	}
+}
+
+func TestEditor_ShiftArrow_ExtendsExistingSelection(t *testing.T) {
+	e := newTestEditor("hello world")
+	e.cursorRow = 0
+	e.cursorCol = 0
+
+	// First Shift+Right: select position 0->1
+	fromRow, fromCol := e.cursorRow, e.cursorCol
+	e.moveCursorRight()
+	e.extendSelection(fromRow, fromCol)
+
+	// Second Shift+Right: extend 0->2 (anchor stays at 0)
+	fromRow, fromCol = e.cursorRow, e.cursorCol
+	e.moveCursorRight()
+	e.extendSelection(fromRow, fromCol)
+
+	if e.selAnchorCol != 0 {
+		t.Errorf("anchor should stay at col 0, got %d", e.selAnchorCol)
+	}
+	if e.selEndCol != 2 {
+		t.Errorf("end should be at col 2, got %d", e.selEndCol)
+	}
+}
+
+func TestEditor_ShiftArrow_SelectionRange(t *testing.T) {
+	e := newTestEditor("hello world")
+	e.cursorRow = 0
+	e.cursorCol = 2
+
+	// Select from col 2 to col 5 using 3x Shift+Right
+	for i := 0; i < 3; i++ {
+		fromRow, fromCol := e.cursorRow, e.cursorCol
+		e.moveCursorRight()
+		e.extendSelection(fromRow, fromCol)
+	}
+
+	got := e.selectedText()
+	if got != "llo" {
+		t.Errorf("expected selected text 'llo', got %q", got)
+	}
+}
+
+func TestEditor_ShiftArrow_CollapseClearsSelection(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorRow = 0
+	e.cursorCol = 2
+
+	// Shift+Right
+	fromRow, fromCol := e.cursorRow, e.cursorCol
+	e.moveCursorRight()
+	e.extendSelection(fromRow, fromCol)
+
+	if !e.hasSelection {
+		t.Fatal("should have selection")
+	}
+
+	// Shift+Left back to anchor position — selection should collapse
+	fromRow, fromCol = e.cursorRow, e.cursorCol
+	e.moveCursorLeft()
+	e.extendSelection(fromRow, fromCol)
+
+	if e.hasSelection {
+		t.Error("selection should be cleared when end equals anchor")
+	}
+}
+
+func TestEditor_ShiftHome_SelectsToStart(t *testing.T) {
+	e := newTestEditor("hello world")
+	e.cursorRow = 0
+	e.cursorCol = 5
+
+	fromRow, fromCol := e.cursorRow, e.cursorCol
+	e.moveCursorToLineStart()
+	e.extendSelection(fromRow, fromCol)
+
+	if !e.hasSelection {
+		t.Fatal("expected selection")
+	}
+	if e.selAnchorCol != 5 || e.selEndCol != 0 {
+		t.Errorf("expected anchor=5, end=0, got anchor=%d, end=%d", e.selAnchorCol, e.selEndCol)
+	}
+	got := e.selectedText()
+	if got != "hello" {
+		t.Errorf("expected 'hello', got %q", got)
+	}
+}
+
+func TestEditor_ShiftEnd_SelectsToEnd(t *testing.T) {
+	e := newTestEditor("hello world")
+	e.cursorRow = 0
+	e.cursorCol = 6
+
+	fromRow, fromCol := e.cursorRow, e.cursorCol
+	e.moveCursorToLineEnd()
+	e.extendSelection(fromRow, fromCol)
+
+	if !e.hasSelection {
+		t.Fatal("expected selection")
+	}
+	got := e.selectedText()
+	if got != "world" {
+		t.Errorf("expected 'world', got %q", got)
+	}
+}
+
+func TestEditor_TypeReplacesSelection(t *testing.T) {
+	e := newTestEditor("hello world")
+
+	// Select "llo" (col 2 to 5)
+	e.selAnchorRow = 0
+	e.selAnchorCol = 2
+	e.selEndRow = 0
+	e.selEndCol = 5
+	e.hasSelection = true
+	e.cursorRow = 0
+	e.cursorCol = 5
+
+	// Delete selection, then insert "X"
+	e.deleteSelection()
+	e.insertText("X")
+
+	if e.lines[0] != "heX world" {
+		t.Errorf("expected 'heX world', got %q", e.lines[0])
+	}
+}
+
+// --- Alt+Arrow word jumping tests ---
+
+func TestEditor_AltRight_JumpsWord(t *testing.T) {
+	e := newTestEditor("hello world foo")
+	e.cursorRow = 0
+	e.cursorCol = 0
+
+	// Jump to start of "world"
+	e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
+	if e.cursorCol != 6 {
+		t.Errorf("expected col 6, got %d", e.cursorCol)
+	}
+
+	// Jump to start of "foo"
+	e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
+	if e.cursorCol != 12 {
+		t.Errorf("expected col 12, got %d", e.cursorCol)
+	}
+
+	// Jump past "foo" to end of line
+	e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
+	if e.cursorCol != 15 {
+		t.Errorf("expected col 15 (end of line), got %d", e.cursorCol)
+	}
+}
+
+func TestEditor_AltLeft_JumpsWord(t *testing.T) {
+	e := newTestEditor("hello world foo")
+	e.cursorRow = 0
+	e.cursorCol = 15
+
+	// Jump to start of "foo"
+	e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
+	if e.cursorCol != 12 {
+		t.Errorf("expected col 12, got %d", e.cursorCol)
+	}
+
+	// Jump to start of "world"
+	e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
+	if e.cursorCol != 6 {
+		t.Errorf("expected col 6, got %d", e.cursorCol)
+	}
+
+	// Jump to start of "hello"
+	e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
+	if e.cursorCol != 0 {
+		t.Errorf("expected col 0, got %d", e.cursorCol)
+	}
+}
+
+func TestEditor_AltArrow_CrossesLines(t *testing.T) {
+	e := newTestEditor("hello\nworld")
+	e.cursorRow = 0
+	e.cursorCol = 5
+
+	// Alt+Right at end of first line wraps to second line, skips "world"
+	e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
+	if e.cursorRow != 1 || e.cursorCol != 5 {
+		t.Errorf("expected (1,5), got (%d,%d)", e.cursorRow, e.cursorCol)
+	}
+
+	// Alt+Left from end of "world" goes to start of "world"
+	e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
+	if e.cursorRow != 1 || e.cursorCol != 0 {
+		t.Errorf("expected (1,0), got (%d,%d)", e.cursorRow, e.cursorCol)
+	}
+
+	// Alt+Left from start of "world" wraps to start of "hello"
+	e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
+	if e.cursorRow != 0 || e.cursorCol != 0 {
+		t.Errorf("expected (0,0), got (%d,%d)", e.cursorRow, e.cursorCol)
+	}
+}
+
+// --- Shift+Click tests ---
+
+func TestEditor_ShiftClick_SelectsRange(t *testing.T) {
+	e := newTestEditor("hello world\nsecond line")
+	e.cursorRow = 0
+	e.cursorCol = 3
+
+	// Simulate Shift+Click at (1, 5)
+	fromRow, fromCol := e.cursorRow, e.cursorCol
+	e.cursorRow = 1
+	e.cursorCol = 5
+	e.extendSelection(fromRow, fromCol)
+
+	if !e.hasSelection {
+		t.Fatal("expected selection after shift+click")
+	}
+	if e.selAnchorRow != 0 || e.selAnchorCol != 3 {
+		t.Errorf("expected anchor at (0,3), got (%d,%d)", e.selAnchorRow, e.selAnchorCol)
+	}
+	if e.selEndRow != 1 || e.selEndCol != 5 {
+		t.Errorf("expected end at (1,5), got (%d,%d)", e.selEndRow, e.selEndCol)
+	}
+
+	got := e.selectedText()
+	expected := "lo world\nsecon"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestEditor_PlainClick_ClearsSelection(t *testing.T) {
+	e := newTestEditor("hello world")
+
+	// Set up a selection
+	e.selAnchorRow = 0
+	e.selAnchorCol = 0
+	e.selEndRow = 0
+	e.selEndCol = 5
+	e.hasSelection = true
+
+	// Plain click clears selection
+	e.cursorRow = 0
+	e.cursorCol = 8
+	e.clearSelection()
+
+	if e.hasSelection {
+		t.Error("plain click should clear selection")
+	}
+}
+
+// --- ExtendSelection edge cases ---
+
+func TestEditor_ExtendSelection_SamePositionNoSelection(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorRow = 0
+	e.cursorCol = 3
+
+	// Extend from (0,3) to (0,3) — should NOT create a selection
+	e.extendSelection(0, 3)
+
+	if e.hasSelection {
+		t.Error("extending selection to same position should not create selection")
+	}
+}
+
+func TestEditor_MoveCursorLeft_WrapsLine(t *testing.T) {
+	e := newTestEditor("hello\nworld")
+	e.cursorRow = 1
+	e.cursorCol = 0
+
+	e.moveCursorLeft()
+
+	if e.cursorRow != 0 || e.cursorCol != 5 {
+		t.Errorf("expected (0,5), got (%d,%d)", e.cursorRow, e.cursorCol)
+	}
+}
+
+func TestEditor_MoveCursorRight_WrapsLine(t *testing.T) {
+	e := newTestEditor("hello\nworld")
+	e.cursorRow = 0
+	e.cursorCol = 5
+
+	e.moveCursorRight()
+
+	if e.cursorRow != 1 || e.cursorCol != 0 {
+		t.Errorf("expected (1,0), got (%d,%d)", e.cursorRow, e.cursorCol)
+	}
+}
+
+func TestEditor_MoveCursorLeft_AtStart(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorRow = 0
+	e.cursorCol = 0
+
+	e.moveCursorLeft() // should be no-op
+
+	if e.cursorRow != 0 || e.cursorCol != 0 {
+		t.Errorf("expected (0,0), got (%d,%d)", e.cursorRow, e.cursorCol)
+	}
+}
+
+func TestEditor_MoveCursorRight_AtEnd(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorRow = 0
+	e.cursorCol = 5
+
+	e.moveCursorRight() // should be no-op
+
+	if e.cursorRow != 0 || e.cursorCol != 5 {
+		t.Errorf("expected (0,5), got (%d,%d)", e.cursorRow, e.cursorCol)
 	}
 }

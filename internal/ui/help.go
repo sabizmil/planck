@@ -138,6 +138,11 @@ func (h *Help) renderHelpContent() string {
 	sb.WriteString(h.renderKeySection([][]string{
 		{"Esc", "Save & exit edit mode"},
 		{"Ctrl+S", "Save without exiting"},
+		{"Shift+Arrow", "Select text"},
+		{"Alt+Arrow", "Jump by word"},
+		{"Alt+Shift+Arrow", "Select by word"},
+		{"Shift+Home/End", "Select to line start/end"},
+		{"Shift+Click", "Select from cursor to click"},
 	}))
 	sb.WriteString("\n")
 

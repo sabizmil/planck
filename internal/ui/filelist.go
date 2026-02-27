@@ -235,7 +235,7 @@ func (f *FileList) moveVisibleNodes() []*treeNode {
 }
 
 func (f *FileList) ensureMoveVisible() {
-	visibleLines := f.visibleLines()
+	visibleLines := f.moveVisibleLines()
 	if f.moveCursor < f.moveOffset {
 		f.moveOffset = f.moveCursor
 	}
@@ -244,9 +244,20 @@ func (f *FileList) ensureMoveVisible() {
 	}
 }
 
-// visibleLines returns the number of visible lines
+// visibleLines returns the number of content lines visible in normal mode.
+// Chrome: header(1) + separator(1) = 2 lines.
 func (f *FileList) visibleLines() int {
-	lines := f.height - 5 // header(1) + sep(1) + content + footer sep(1) + padding(2)
+	lines := f.height - 2 // header(1) + sep(1)
+	if lines < 1 {
+		lines = 1
+	}
+	return lines
+}
+
+// moveVisibleLines returns the number of content lines visible in move mode.
+// Move mode has extra footer chrome: footer separator(1) + footer hint(1).
+func (f *FileList) moveVisibleLines() int {
+	lines := f.height - 4 // header(1) + sep(1) + footer sep(1) + footer hint(1)
 	if lines < 1 {
 		lines = 1
 	}
@@ -471,7 +482,7 @@ func (f *FileList) View() string {
 		b.WriteString("\n")
 	}
 
-	return f.theme.Sidebar.Width(f.width).Height(f.height).Render(b.String())
+	return f.theme.Sidebar.Width(f.width).Height(f.height).MaxHeight(f.height).Render(b.String())
 }
 
 // viewMoveMode renders the file list in move mode.
@@ -486,7 +497,7 @@ func (f *FileList) viewMoveMode() string {
 	b.WriteString("\n")
 
 	moveNodes := f.moveVisibleNodes()
-	visibleLines := f.visibleLines()
+	visibleLines := f.moveVisibleLines()
 	contentWidth := f.width - 2
 
 	endIdx := f.moveOffset + visibleLines
@@ -559,7 +570,7 @@ func (f *FileList) viewMoveMode() string {
 	b.WriteString("\n")
 	b.WriteString(f.theme.Dimmed.Render(" Enter=move  Esc=cancel"))
 
-	return f.theme.Sidebar.Width(f.width).Height(f.height).Render(b.String())
+	return f.theme.Sidebar.Width(f.width).Height(f.height).MaxHeight(f.height).Render(b.String())
 }
 
 // SetFiles sets the list of files and rebuilds the tree
@@ -600,10 +611,11 @@ func (f *FileList) SetFocused(focused bool) {
 	f.focused = focused
 }
 
-// SetSize sets the file list dimensions
+// SetSize sets the file list dimensions and ensures the cursor remains visible.
 func (f *FileList) SetSize(width, height int) {
 	f.width = width
 	f.height = height
+	f.ensureVisible()
 }
 
 // SetPosition sets the screen Y offset for mouse coordinate translation.

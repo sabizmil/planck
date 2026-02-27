@@ -1421,7 +1421,7 @@ func (a *App) handlePlanningMouse(msg tea.MouseMsg) {
 		if msg.X < borderCol {
 			// Mouse is over the file list — scroll the file list
 			a.fileList.HandleMouse(msg)
-		} else if !a.editor.Selecting() {
+		} else {
 			// Mouse is over the editor — scroll the markdown viewer
 			a.editor.Update(msg)
 		}
@@ -1466,12 +1466,6 @@ func (a *App) handlePlanningMouse(msg tea.MouseMsg) {
 			_ = a.config.Save()
 			return
 		}
-	}
-
-	// Forward motion/release to editor when it's performing a drag selection
-	if a.editor.Selecting() && (me.Action == tea.MouseActionMotion || me.Action == tea.MouseActionRelease) {
-		a.editor.Update(msg)
-		return
 	}
 
 	// Left click on file list area: switch focus and handle the click
@@ -1579,8 +1573,8 @@ func (a *App) View() string {
 		mainContent = panel.View()
 	}
 
-	// Ensure content fits height
-	mainContent = lipgloss.NewStyle().Height(contentHeight).Render(mainContent)
+	// Ensure content fits height (MaxHeight truncates overflow; Height only pads)
+	mainContent = lipgloss.NewStyle().Height(contentHeight).MaxHeight(contentHeight).Render(mainContent)
 	b.WriteString(mainContent)
 
 	// Status bar at bottom
@@ -1621,7 +1615,7 @@ func (a *App) renderStatusBar() string {
 		// Show context hints
 		if a.isOnPlanningTab() {
 			if a.editor.Mode() == ui.EditorModeEdit {
-				leftContent = a.theme.KeyHint.Render("[Esc] save & exit  [Ctrl+S] save")
+				leftContent = a.theme.KeyHint.Render("[Esc] save & exit  [Ctrl+S] save  [Shift+Arrow] select  [Alt+Arrow] word jump")
 			} else {
 				leftContent = a.theme.KeyHint.Render("[^|v] navigate  [e] edit  [n] new  [d] delete  [r] refresh  [a] agent  [s] settings  [Shift+Tab] next tab")
 			}

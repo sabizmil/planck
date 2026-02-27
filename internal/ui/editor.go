@@ -43,8 +43,7 @@ type Editor struct {
 	cursorCol int
 	modified  bool
 
-	// Selection state (for click-and-drag and future shift+arrow)
-	selecting    bool // true while a mouse drag is in progress
+	// Selection state (driven by Shift+Arrow keys and Shift+Click)
 	hasSelection bool // true when a visible selection exists
 	selAnchorRow int  // fixed end of the selection (where drag started)
 	selAnchorCol int
@@ -182,26 +181,23 @@ func (e *Editor) updateEditMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 		}
 
 	case tea.KeyLeft:
-		e.clearSelection()
-		if e.cursorCol > 0 {
-			e.cursorCol--
-		} else if e.cursorRow > 0 {
-			// Move to end of previous line
-			e.cursorRow--
-			e.cursorCol = len(e.lines[e.cursorRow])
+		if msg.Alt {
+			// Alt+Left: jump to previous word boundary
+			e.clearSelection()
+			e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
+		} else {
+			e.clearSelection()
+			e.moveCursorLeft()
 		}
 
 	case tea.KeyRight:
-		e.clearSelection()
-		if e.cursorRow < len(e.lines) {
-			lineLen := len(e.lines[e.cursorRow])
-			if e.cursorCol < lineLen {
-				e.cursorCol++
-			} else if e.cursorRow < len(e.lines)-1 {
-				// Move to start of next line
-				e.cursorRow++
-				e.cursorCol = 0
-			}
+		if msg.Alt {
+			// Alt+Right: jump to next word boundary
+			e.clearSelection()
+			e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
+		} else {
+			e.clearSelection()
+			e.moveCursorRight()
 		}
 
 	case tea.KeyUp:
@@ -216,12 +212,77 @@ func (e *Editor) updateEditMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 
 	case tea.KeyHome, tea.KeyCtrlA:
 		e.clearSelection()
-		e.cursorCol = 0
+		e.moveCursorToLineStart()
 
 	case tea.KeyEnd, tea.KeyCtrlE:
 		e.clearSelection()
-		if e.cursorRow < len(e.lines) {
-			e.cursorCol = len(e.lines[e.cursorRow])
+		e.moveCursorToLineEnd()
+
+	// --- Shift+Arrow: extend selection ---
+	case tea.KeyShiftLeft:
+		if msg.Alt {
+			// Alt+Shift+Left: select to previous word boundary
+			fromRow, fromCol := e.cursorRow, e.cursorCol
+			e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
+			e.extendSelection(fromRow, fromCol)
+		} else {
+			fromRow, fromCol := e.cursorRow, e.cursorCol
+			e.moveCursorLeft()
+			e.extendSelection(fromRow, fromCol)
+		}
+
+	case tea.KeyShiftRight:
+		if msg.Alt {
+			// Alt+Shift+Right: select to next word boundary
+			fromRow, fromCol := e.cursorRow, e.cursorCol
+			e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
+			e.extendSelection(fromRow, fromCol)
+		} else {
+			fromRow, fromCol := e.cursorRow, e.cursorCol
+			e.moveCursorRight()
+			e.extendSelection(fromRow, fromCol)
+		}
+
+	case tea.KeyShiftUp:
+		fromRow, fromCol := e.cursorRow, e.cursorCol
+		e.moveCursorUpVisual()
+		e.extendSelection(fromRow, fromCol)
+		e.ensureCursorVisible()
+
+	case tea.KeyShiftDown:
+		fromRow, fromCol := e.cursorRow, e.cursorCol
+		e.moveCursorDownVisual()
+		e.extendSelection(fromRow, fromCol)
+		e.ensureCursorVisible()
+
+	case tea.KeyShiftHome:
+		fromRow, fromCol := e.cursorRow, e.cursorCol
+		e.moveCursorToLineStart()
+		e.extendSelection(fromRow, fromCol)
+
+	case tea.KeyShiftEnd:
+		fromRow, fromCol := e.cursorRow, e.cursorCol
+		e.moveCursorToLineEnd()
+		e.extendSelection(fromRow, fromCol)
+
+	// --- Ctrl+Arrow: word jump (Linux/Windows convention) ---
+	case tea.KeyCtrlLeft:
+		if msg.Alt {
+			// Ctrl+Alt+Left: same as Alt+Left (some terminals send this)
+			e.clearSelection()
+			e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
+		} else {
+			e.clearSelection()
+			e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
+		}
+
+	case tea.KeyCtrlRight:
+		if msg.Alt {
+			e.clearSelection()
+			e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
+		} else {
+			e.clearSelection()
+			e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
 		}
 
 	case tea.KeyEnter:
@@ -421,6 +482,148 @@ func (e *Editor) moveCursorDownVisual() {
 	e.cursorCol = newCol
 }
 
+// moveCursorLeft moves the cursor one character to the left, wrapping to the
+// end of the previous line if at column 0. Does NOT clear selection.
+func (e *Editor) moveCursorLeft() {
+	if e.cursorCol > 0 {
+		e.cursorCol--
+	} else if e.cursorRow > 0 {
+		e.cursorRow--
+		e.cursorCol = len(e.lines[e.cursorRow])
+	}
+}
+
+// moveCursorRight moves the cursor one character to the right, wrapping to
+// the start of the next line if at end of line. Does NOT clear selection.
+func (e *Editor) moveCursorRight() {
+	if e.cursorRow < len(e.lines) {
+		lineLen := len(e.lines[e.cursorRow])
+		if e.cursorCol < lineLen {
+			e.cursorCol++
+		} else if e.cursorRow < len(e.lines)-1 {
+			e.cursorRow++
+			e.cursorCol = 0
+		}
+	}
+}
+
+// moveCursorToLineStart moves the cursor to column 0. Does NOT clear selection.
+func (e *Editor) moveCursorToLineStart() {
+	e.cursorCol = 0
+}
+
+// moveCursorToLineEnd moves the cursor to the end of the current line. Does NOT clear selection.
+func (e *Editor) moveCursorToLineEnd() {
+	if e.cursorRow < len(e.lines) {
+		e.cursorCol = len(e.lines[e.cursorRow])
+	}
+}
+
+// extendSelection extends (or starts) a selection to the current cursor position.
+// If no selection exists, the anchor is set to the given (fromRow, fromCol) —
+// typically the cursor position BEFORE the move that triggered the extension.
+// The selection endpoint is always updated to the current cursor position.
+func (e *Editor) extendSelection(fromRow, fromCol int) {
+	if !e.hasSelection {
+		e.selAnchorRow = fromRow
+		e.selAnchorCol = fromCol
+	}
+	e.selEndRow = e.cursorRow
+	e.selEndCol = e.cursorCol
+	if e.selEndRow != e.selAnchorRow || e.selEndCol != e.selAnchorCol {
+		e.hasSelection = true
+	} else {
+		e.hasSelection = false
+	}
+}
+
+// isWordChar returns true for characters considered part of a "word" (letters,
+// digits, underscore). Everything else is a boundary.
+func isWordChar(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+		(ch >= '0' && ch <= '9') || ch == '_'
+}
+
+// wordBoundaryLeft returns the (row, col) position at the start of the previous
+// word from the given position. Skips whitespace/punctuation backward, then skips
+// word characters backward. Wraps across line boundaries.
+func (e *Editor) wordBoundaryLeft(row, col int) (int, int) {
+	if len(e.lines) == 0 {
+		return 0, 0
+	}
+
+	// If at start of line, wrap to end of previous line
+	if col <= 0 {
+		if row <= 0 {
+			return 0, 0
+		}
+		row--
+		col = len(e.lines[row])
+	}
+
+	line := e.lines[row]
+
+	// Skip non-word characters backward (whitespace, punctuation)
+	for col > 0 && !isWordChar(line[col-1]) {
+		col--
+	}
+
+	// If we consumed everything and we're at start of line, try wrapping to previous line
+	if col == 0 {
+		if row <= 0 {
+			return 0, 0
+		}
+		row--
+		col = len(e.lines[row])
+		line = e.lines[row]
+		// Skip trailing non-word chars on previous line
+		for col > 0 && !isWordChar(line[col-1]) {
+			col--
+		}
+	}
+
+	// Skip word characters backward
+	for col > 0 && isWordChar(line[col-1]) {
+		col--
+	}
+
+	return row, col
+}
+
+// wordBoundaryRight returns the (row, col) position at the start of the next
+// word from the given position. Skips word characters forward, then skips
+// whitespace/punctuation forward. Wraps across line boundaries.
+func (e *Editor) wordBoundaryRight(row, col int) (int, int) {
+	if len(e.lines) == 0 {
+		return 0, 0
+	}
+
+	line := e.lines[row]
+
+	// If at end of line, wrap to start of next line
+	if col >= len(line) {
+		if row >= len(e.lines)-1 {
+			return row, col
+		}
+		row++
+		col = 0
+		line = e.lines[row]
+	}
+
+	// Skip word characters forward
+	for col < len(line) && isWordChar(line[col]) {
+		col++
+	}
+
+	// Skip non-word characters forward (whitespace, punctuation)
+	for col < len(line) && !isWordChar(line[col]) {
+		col++
+	}
+
+	// If we reached end of line, that's a valid stop position
+	return row, col
+}
+
 func (e *Editor) ensureCursorVisible() {
 	visibleLines := e.visibleLines()
 	maxLineWidth := e.editMaxLineWidth()
@@ -500,7 +703,7 @@ func (e *Editor) View() string {
 		b.WriteString(e.theme.Dimmed.Render(fmt.Sprintf("Ln %d, Col %d", e.cursorRow+1, e.cursorCol+1)))
 	}
 
-	return e.theme.DetailPanel.Width(e.width).Height(e.height).Render(b.String())
+	return e.theme.DetailPanel.Width(e.width).Height(e.height).MaxHeight(e.height).Render(b.String())
 }
 
 func (e *Editor) renderViewMode(visibleLines int) string {
@@ -707,27 +910,62 @@ func (e *Editor) renderEditMode(visibleLines int) string {
 
 		// Render each character with the appropriate style
 		switch {
-		case e.hasSelection:
-			// Selection-aware rendering: build runs of same-styled characters
+			case e.hasSelection:
+			// Selection-aware rendering: batch consecutive same-styled characters
+			// into single Render() calls to avoid per-character ANSI escape sequences
+			// that can confuse lipgloss's word wrapper (cellbuf.Wrap).
+			const (
+				runNormal    = 0
+				runSelection = 1
+				runCursor    = 2
+			)
+			type styledRun struct {
+				text    strings.Builder
+				runType int
+			}
+			var runs []styledRun
+			curRunType := -1
+
 			for j := 0; j <= len(vl.text); j++ {
 				logCol := vl.colOffset + j
+				var ch string
+				var rt int
 
 				switch {
 				case hasCursor && j == localCursorCol:
-					// Cursor position
 					if j >= len(vl.text) {
-						b.WriteString(cursorStyle.Render(" "))
+						ch = " "
 					} else {
-						b.WriteString(cursorStyle.Render(string(vl.text[j])))
+						ch = string(vl.text[j])
 					}
+					rt = runCursor
 				case j < len(vl.text):
+					ch = string(vl.text[j])
 					if e.isInSelection(vl.logicalRow, logCol) {
-						b.WriteString(selectionStyle.Render(string(vl.text[j])))
+						rt = runSelection
 					} else {
-						b.WriteString(e.theme.Normal.Render(string(vl.text[j])))
+						rt = runNormal
 					}
+				default:
+					continue // j == len(vl.text) and no cursor
 				}
-				// j == len(vl.text) and no cursor: nothing to render
+
+				if rt != curRunType {
+					runs = append(runs, styledRun{runType: rt})
+					curRunType = rt
+				}
+				runs[len(runs)-1].text.WriteString(ch)
+			}
+
+			for _, run := range runs {
+				switch run.runType {
+				case runNormal:
+					b.WriteString(e.theme.Normal.Render(run.text.String()))
+				case runSelection:
+					b.WriteString(selectionStyle.Render(run.text.String()))
+				case runCursor:
+					b.WriteString(cursorStyle.Render(run.text.String()))
+				}
 			}
 		case hasCursor:
 			// No selection, but cursor is on this line
@@ -853,11 +1091,6 @@ func (e *Editor) ClearModified() {
 	e.modified = false
 }
 
-// Selecting returns true while a mouse drag selection is in progress.
-func (e *Editor) Selecting() bool {
-	return e.selecting
-}
-
 // ScrollBy scrolls the view by the given number of lines. Works in both view and edit modes.
 func (e *Editor) ScrollBy(delta int) {
 	e.viewOffset += delta
@@ -885,7 +1118,6 @@ func (e *Editor) ScrollBy(delta int) {
 // clearSelection removes any active selection.
 func (e *Editor) clearSelection() {
 	e.hasSelection = false
-	e.selecting = false
 }
 
 // selectionRange returns the selection bounds in document order (start <= end).
@@ -1058,122 +1290,50 @@ func (e *Editor) mouseToLogical(screenX, screenY int) (logRow, logCol int) {
 	return vl.logicalRow, vl.colOffset + col
 }
 
-// handleMouse processes mouse events for scrolling, click-to-place-cursor,
-// and click-and-drag text selection.
+// handleMouse processes mouse events for scrolling and click-to-place-cursor.
+// Mouse drag selection has been removed — use Shift+Arrow keys or Shift+Click instead.
 func (e *Editor) handleMouse(msg tea.MouseMsg) (*Editor, tea.Cmd) {
 	me := tea.MouseEvent(msg)
 
-	// Wheel scroll (both modes) — but suppress while a drag selection is active,
-	// since trackpad scroll events during a click-drag would shift the viewport
-	// and cause the selection to jump erratically.
+	// Wheel scroll (both modes)
 	if me.IsWheel() {
-		if !e.selecting {
-			if msg.Button == tea.MouseButtonWheelUp {
-				e.ScrollBy(-3)
-			} else if msg.Button == tea.MouseButtonWheelDown {
-				e.ScrollBy(3)
-			}
+		if msg.Button == tea.MouseButtonWheelUp {
+			e.ScrollBy(-3)
+		} else if msg.Button == tea.MouseButtonWheelDown {
+			e.ScrollBy(3)
 		}
 		return e, nil
 	}
 
-	switch me.Action {
-	case tea.MouseActionPress:
-		if msg.Button != tea.MouseButtonLeft {
-			return e, nil
-		}
+	if me.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 		return e.handleMousePress(msg)
-
-	case tea.MouseActionMotion:
-		if !e.selecting {
-			return e, nil
-		}
-		return e.handleMouseMotion(msg)
-
-	case tea.MouseActionRelease:
-		if !e.selecting {
-			return e, nil
-		}
-		return e.handleMouseRelease(msg)
 	}
 
 	return e, nil
 }
 
-// mouseToLogicalClamped is like mouseToLogical but clamps the screen Y to
-// the visible content area. This prevents mapping to off-screen visual rows
-// when the mouse is dragged past the top or bottom edge of the editor,
-// avoiding feedback loops with viewport scrolling.
-func (e *Editor) mouseToLogicalClamped(screenX, screenY int) (logRow, logCol int) {
-	relY := screenY - e.screenY - 2 // header + separator
-	relX := screenX - e.screenX - 2 // panel padding
-
-	if relX < 0 {
-		relX = 0
-	}
-
-	// Clamp relY to the visible content area
-	if relY < 0 {
-		relY = 0
-	}
-	maxRelY := e.visibleLines() - 1
-	if maxRelY < 0 {
-		maxRelY = 0
-	}
-	if relY > maxRelY {
-		relY = maxRelY
-	}
-
-	vrow := relY + e.viewOffset
-
-	lineNumWidth := len(fmt.Sprintf("%d", len(e.lines)))
-	if lineNumWidth < 2 {
-		lineNumWidth = 2
-	}
-	col := relX - lineNumWidth - 3 // line number + " │ "
-
-	maxLineWidth := e.editMaxLineWidth()
-	vlines := e.buildVisualLines(maxLineWidth)
-
-	if vrow >= len(vlines) {
-		vrow = len(vlines) - 1
-	}
-	if vrow < 0 {
-		vrow = 0
-	}
-
-	vl := vlines[vrow]
-
-	if col < 0 {
-		col = 0
-	}
-	if col > len(vl.text) {
-		col = len(vl.text)
-	}
-
-	return vl.logicalRow, vl.colOffset + col
-}
-
-// handleMousePress handles left-click: places cursor and begins a potential drag.
+// handleMousePress handles left-click: places cursor or extends selection with Shift+Click.
 func (e *Editor) handleMousePress(msg tea.MouseMsg) (*Editor, tea.Cmd) {
+	me := tea.MouseEvent(msg)
+
 	if e.mode == EditorModeEdit {
-		row, col := e.mouseToLogicalClamped(msg.X, msg.Y)
+		row, col := e.mouseToLogical(msg.X, msg.Y)
 		if row < 0 {
 			return e, nil
 		}
 
-		// Place cursor and start a potential drag
-		e.cursorRow = row
-		e.cursorCol = col
-		e.selAnchorRow = row
-		e.selAnchorCol = col
-		e.selEndRow = row
-		e.selEndCol = col
-		e.selecting = true
-		e.hasSelection = false // no visible selection until the mouse moves
-		// NOTE: no ensureCursorVisible — mouseToLogicalClamped guarantees the
-		// click maps to a visible row, so scrolling is unnecessary and would
-		// shift the viewport out from under the mouse.
+		if me.Shift {
+			// Shift+Click: extend selection from current cursor to clicked position
+			fromRow, fromCol := e.cursorRow, e.cursorCol
+			e.cursorRow = row
+			e.cursorCol = col
+			e.extendSelection(fromRow, fromCol)
+		} else {
+			// Plain click: place cursor, clear any selection
+			e.cursorRow = row
+			e.cursorCol = col
+			e.clearSelection()
+		}
 	} else {
 		// View mode: enter edit mode with approximate cursor position
 		relY := msg.Y - e.screenY - 2
@@ -1203,64 +1363,5 @@ func (e *Editor) handleMousePress(msg tea.MouseMsg) (*Editor, tea.Cmd) {
 		e.ensureCursorVisible()
 	}
 
-	return e, nil
-}
-
-// handleMouseMotion updates the selection end point as the user drags.
-func (e *Editor) handleMouseMotion(msg tea.MouseMsg) (*Editor, tea.Cmd) {
-	if e.mode != EditorModeEdit {
-		return e, nil
-	}
-
-	row, col := e.mouseToLogicalClamped(msg.X, msg.Y)
-	if row < 0 {
-		return e, nil
-	}
-
-	e.selEndRow = row
-	e.selEndCol = col
-	e.cursorRow = row
-	e.cursorCol = col
-
-	// Mark selection as visible if anchor and end differ
-	if e.selEndRow != e.selAnchorRow || e.selEndCol != e.selAnchorCol {
-		e.hasSelection = true
-	} else {
-		e.hasSelection = false
-	}
-
-	// NOTE: Do NOT call ensureCursorVisible() here. During a drag, the mouse
-	// is pointing at a visible screen position so the cursor is already visible.
-	// Calling ensureCursorVisible creates a feedback loop: the viewport scrolls,
-	// which changes what row the same screen Y maps to, which triggers more
-	// scrolling — causing visual jumping and glitching.
-	return e, nil
-}
-
-// handleMouseRelease finalizes the selection when the user releases the mouse.
-func (e *Editor) handleMouseRelease(msg tea.MouseMsg) (*Editor, tea.Cmd) {
-	if e.mode != EditorModeEdit {
-		e.selecting = false
-		return e, nil
-	}
-
-	row, col := e.mouseToLogical(msg.X, msg.Y)
-	if row >= 0 {
-		e.selEndRow = row
-		e.selEndCol = col
-		e.cursorRow = row
-		e.cursorCol = col
-	}
-
-	e.selecting = false
-
-	// If anchor == end, it was just a click, not a drag
-	if e.selEndRow == e.selAnchorRow && e.selEndCol == e.selAnchorCol {
-		e.hasSelection = false
-	} else {
-		e.hasSelection = true
-	}
-
-	e.ensureCursorVisible()
 	return e, nil
 }
