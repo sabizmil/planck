@@ -267,23 +267,12 @@ func (e *Editor) updateEditMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 
 	// --- Ctrl+Arrow: word jump (Linux/Windows convention) ---
 	case tea.KeyCtrlLeft:
-		if msg.Alt {
-			// Ctrl+Alt+Left: same as Alt+Left (some terminals send this)
-			e.clearSelection()
-			e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
-		} else {
-			e.clearSelection()
-			e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
-		}
+		e.clearSelection()
+		e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
 
 	case tea.KeyCtrlRight:
-		if msg.Alt {
-			e.clearSelection()
-			e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
-		} else {
-			e.clearSelection()
-			e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
-		}
+		e.clearSelection()
+		e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
 
 	case tea.KeyEnter:
 		if e.hasSelection {
@@ -547,7 +536,7 @@ func isWordChar(ch byte) bool {
 // wordBoundaryLeft returns the (row, col) position at the start of the previous
 // word from the given position. Skips whitespace/punctuation backward, then skips
 // word characters backward. Wraps across line boundaries.
-func (e *Editor) wordBoundaryLeft(row, col int) (int, int) {
+func (e *Editor) wordBoundaryLeft(row, col int) (newRow, newCol int) {
 	if len(e.lines) == 0 {
 		return 0, 0
 	}
@@ -593,7 +582,7 @@ func (e *Editor) wordBoundaryLeft(row, col int) (int, int) {
 // wordBoundaryRight returns the (row, col) position at the start of the next
 // word from the given position. Skips word characters forward, then skips
 // whitespace/punctuation forward. Wraps across line boundaries.
-func (e *Editor) wordBoundaryRight(row, col int) (int, int) {
+func (e *Editor) wordBoundaryRight(row, col int) (newRow, newCol int) {
 	if len(e.lines) == 0 {
 		return 0, 0
 	}
@@ -910,7 +899,7 @@ func (e *Editor) renderEditMode(visibleLines int) string {
 
 		// Render each character with the appropriate style
 		switch {
-			case e.hasSelection:
+		case e.hasSelection:
 			// Selection-aware rendering: batch consecutive same-styled characters
 			// into single Render() calls to avoid per-character ANSI escape sequences
 			// that can confuse lipgloss's word wrapper (cellbuf.Wrap).

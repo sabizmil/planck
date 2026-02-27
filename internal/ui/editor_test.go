@@ -520,12 +520,12 @@ func TestEditor_SetContent_ClearsSelection(t *testing.T) {
 
 func TestWordBoundaryLeft(t *testing.T) {
 	tests := []struct {
-		name      string
-		content   string
-		startRow  int
-		startCol  int
-		wantRow   int
-		wantCol   int
+		name     string
+		content  string
+		startRow int
+		startCol int
+		wantRow  int
+		wantCol  int
 	}{
 		{
 			name:     "middle of word",
