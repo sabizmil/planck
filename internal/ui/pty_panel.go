@@ -12,7 +12,9 @@ import (
 
 // PTYPanel displays an embedded PTY session
 type PTYPanel struct {
-	theme     *Theme
+	theme  *Theme
+	keymap *Keymap
+
 	visible   bool
 	focused   bool
 	inputMode bool // true = keystrokes go to PTY
@@ -33,17 +35,14 @@ type PTYPanel struct {
 	// Dimensions
 	width  int
 	height int
-
-	// Escape key sequence
-	escapeKey string
 }
 
 // NewPTYPanel creates a new PTY panel
-func NewPTYPanel(theme *Theme) *PTYPanel {
+func NewPTYPanel(theme *Theme, keymap *Keymap) *PTYPanel {
 	return &PTYPanel{
-		theme:     theme,
-		escapeKey: `ctrl+\`,
-		status:    "idle",
+		theme:  theme,
+		keymap: keymap,
+		status: "idle",
 	}
 }
 
@@ -71,6 +70,9 @@ func (p *PTYPanel) Update(msg tea.Msg) (*PTYPanel, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		key := msg.String()
+		km := p.keymap
+
 		if p.inputMode {
 			// Any keypress in input mode snaps to live view
 			if p.scrollOffset > 0 {
@@ -86,8 +88,8 @@ func (p *PTYPanel) Update(msg tea.Msg) (*PTYPanel, tea.Cmd) {
 				return p, nil
 			}
 
-			// Check escape hatch (Ctrl+\)
-			if msg.Type == tea.KeyCtrlBackslash {
+			// Check escape hatch
+			if km.Matches(ContextAgentInput, ActionExitInput, key) {
 				p.inputMode = false
 				return p, nil
 			}
@@ -103,21 +105,21 @@ func (p *PTYPanel) Update(msg tea.Msg) (*PTYPanel, tea.Cmd) {
 		}
 
 		// Non-input mode keybindings
-		switch msg.String() {
-		case "i", "enter":
+		switch {
+		case km.Matches(ContextAgentNormal, ActionEnterInput, key):
 			p.inputMode = true
 			p.scrollOffset = 0
-		case "k", "up":
+		case km.Matches(ContextAgentNormal, ActionScrollUp, key):
 			p.scrollUp(1)
-		case "j", "down":
+		case km.Matches(ContextAgentNormal, ActionScrollDown, key):
 			p.scrollDown(1)
-		case "g":
+		case km.Matches(ContextAgentNormal, ActionScrollTop, key):
 			p.scrollToTop()
-		case "G":
+		case km.Matches(ContextAgentNormal, ActionScrollBottom, key):
 			p.scrollOffset = 0
-		case "pgup":
+		case km.Matches(ContextAgentNormal, ActionScrollPageUp, key):
 			p.scrollUp(p.height / 2)
-		case "pgdown":
+		case km.Matches(ContextAgentNormal, ActionScrollPageDown, key):
 			p.scrollDown(p.height / 2)
 		}
 	}

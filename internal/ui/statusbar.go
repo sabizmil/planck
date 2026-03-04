@@ -19,6 +19,7 @@ const (
 // StatusBar displays keybindings and breadcrumb
 type StatusBar struct {
 	theme      *Theme
+	keymap     *Keymap
 	mode       Mode
 	breadcrumb []string
 	message    string
@@ -26,9 +27,10 @@ type StatusBar struct {
 }
 
 // NewStatusBar creates a new status bar
-func NewStatusBar(theme *Theme) *StatusBar {
+func NewStatusBar(theme *Theme, keymap *Keymap) *StatusBar {
 	return &StatusBar{
-		theme: theme,
+		theme:  theme,
+		keymap: keymap,
 	}
 }
 
@@ -61,22 +63,38 @@ func (s *StatusBar) View() string {
 }
 
 func (s *StatusBar) renderKeybindings() string {
-	var keys []string
+	km := s.keymap
 
+	type hint struct {
+		key  string
+		desc string
+	}
+
+	var hints []hint
 	switch s.mode {
 	case ModeNormal:
-		keys = []string{"↑/↓", "navigate", "enter", "select", "e", "edit", "s", "agent"}
+		hints = []hint{
+			{km.DisplayKeysFor(ContextFileList, ActionMoveDown), "navigate"},
+			{km.DisplayKeysFor(ContextFileList, ActionOpenFile), "select"},
+			{km.DisplayKeysFor(ContextFileList, ActionEditMode), "edit"},
+			{km.DisplayKeysFor(ContextGlobal, ActionSettings), "settings"},
+		}
 	case ModeSession:
-		keys = []string{"i", "input", "Ctrl+\\", "exit", "Tab", "switch"}
+		hints = []hint{
+			{km.DisplayKeysFor(ContextAgentNormal, ActionEnterInput), "input"},
+			{km.DisplayKeysFor(ContextAgentInput, ActionExitInput), "exit"},
+			{km.DisplayKeysFor(ContextGlobal, ActionNextTab), "switch"},
+		}
 	}
 
 	var parts []string
-	for i := 0; i < len(keys); i += 2 {
-		if i+1 < len(keys) {
-			key := s.theme.Selected.Render(fmt.Sprintf("[%s]", keys[i]))
-			action := s.theme.Dimmed.Render(keys[i+1])
-			parts = append(parts, fmt.Sprintf("%s%s", key, action))
+	for _, h := range hints {
+		if h.key == "" {
+			continue
 		}
+		key := s.theme.Selected.Render(fmt.Sprintf("[%s]", h.key))
+		action := s.theme.Dimmed.Render(h.desc)
+		parts = append(parts, fmt.Sprintf("%s%s", key, action))
 	}
 
 	return strings.Join(parts, " ")

@@ -8,138 +8,202 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// keybindingEntry represents a single key binding.
-type keybindingEntry struct {
-	Key  string
-	Desc string
+// KeybindingsChangedMsg is emitted when keybindings are changed.
+type KeybindingsChangedMsg struct {
+	Keymap *Keymap
 }
 
-// keybindingContext groups keybindings by context.
-type keybindingContext struct {
-	Name     string
-	Bindings []keybindingEntry
-}
-
-var keybindingContexts = []keybindingContext{
-	{
-		Name: "Global",
-		Bindings: []keybindingEntry{
-			{"Shift+Tab", "Next tab"},
-			{"Alt+1-9", "Jump to tab by number"},
-			{"Click tab", "Switch to tab"},
-			{"1-9", "Jump to tab (normal mode)"},
-			{"a", "Create new agent tab"},
-			{"x / Ctrl+X", "Close agent tab"},
-			{"s", "Settings"},
-			{"?", "Toggle help"},
-			{"q / Ctrl+C ×2", "Quit"},
-		},
-	},
-	{
-		Name: "File Browser",
-		Bindings: []keybindingEntry{
-			{"j / \u2193", "Move down"},
-			{"k / \u2191", "Move up"},
-			{"Enter", "Open file"},
-			{"\u2192 / l", "Expand folder"},
-			{"\u2190 / h", "Collapse folder"},
-			{"e", "Edit mode"},
-			{"n", "New file"},
-			{"c", "Toggle complete"},
-			{"d", "Delete file"},
-			{"o", "Switch folder"},
-		},
-	},
-	{
-		Name: "Edit Mode",
-		Bindings: []keybindingEntry{
-			{"Esc", "Save & exit"},
-			{"Ctrl+S", "Save"},
-		},
-	},
-	{
-		Name: "Agent (Input)",
-		Bindings: []keybindingEntry{
-			{"Tab", "Sent to agent"},
-			{"Shift+Tab", "Next tab"},
-			{"Alt+1-9", "Jump to tab"},
-			{"Ctrl+\\", "Normal mode"},
-			{"Ctrl+X", "Close tab"},
-			{"Scroll", "Browse scrollback"},
-		},
-	},
-	{
-		Name: "Agent (Normal)",
-		Bindings: []keybindingEntry{
-			{"i / Enter", "Input mode"},
-			{"x", "Close tab"},
-			{"a", "New agent tab"},
-		},
-	},
-	{
-		Name: "Settings",
-		Bindings: []keybindingEntry{
-			{"j / k", "Navigate"},
-			{"Enter / \u2192", "Change value"},
-			{"\u2190 / h", "Previous / back"},
-			{"Tab", "Switch section"},
-			{"r", "Reset (markdown)"},
-			{"R", "Reset all (markdown)"},
-			{"Esc / s", "Close"},
-		},
-	},
-}
-
-// keybindingsPage implements the Keybindings reference page.
+// keybindingsPage implements the Keybindings settings page with interactive rebinding.
 type keybindingsPage struct {
-	theme *Theme
+	theme  *Theme
+	keymap *Keymap
 
 	// Navigation
-	contextIdx   int
-	scrollOffset int
+	contextIdx int
+	bindingIdx int
+
+	// Key capture state
+	capturing bool
+	conflict  *keybindingConflict // non-nil when a conflict is detected
+
+	// Dirty flag
+	dirty bool
 }
 
-func newKeybindingsPage(theme *Theme) *keybindingsPage {
+// keybindingConflict represents a detected keybinding conflict.
+type keybindingConflict struct {
+	NewKey         string
+	ConflictAction Action
+	ConflictDesc   string
+}
+
+func newKeybindingsPage(theme *Theme, keymap *Keymap) *keybindingsPage {
 	return &keybindingsPage{
-		theme: theme,
+		theme:  theme,
+		keymap: keymap,
 	}
 }
 
 func (p *keybindingsPage) Title() string { return "Keybindings" }
 
-func (p *keybindingsPage) IsEditing() bool { return false }
+func (p *keybindingsPage) IsEditing() bool { return p.capturing || p.conflict != nil }
 
 func (p *keybindingsPage) FooterHints() string {
-	return "[j/k] navigate  [Tab] section  [Esc] close"
+	if p.conflict != nil {
+		return "[Enter] swap bindings  [Esc] cancel"
+	}
+	if p.capturing {
+		return "Press new key...  [Esc] cancel"
+	}
+	return "[j/k] navigate  [Enter] rebind  [r] reset  [R] reset all  [Tab] section  [Esc] close"
 }
 
 func (p *keybindingsPage) OnEnter() {
 	p.contextIdx = 0
-	p.scrollOffset = 0
+	p.bindingIdx = 0
+	p.capturing = false
+	p.conflict = nil
 }
 
 func (p *keybindingsPage) OnLeave() tea.Cmd {
-	return nil // read-only, no save
+	if !p.dirty {
+		return nil
+	}
+	p.dirty = false
+	km := p.keymap
+	return func() tea.Msg {
+		return KeybindingsChangedMsg{Keymap: km}
+	}
 }
 
 func (p *keybindingsPage) Update(msg tea.KeyMsg) tea.Cmd {
 	key := msg.String()
 
+	// Handle conflict resolution
+	if p.conflict != nil {
+		return p.handleConflict(key)
+	}
+
+	// Handle key capture mode
+	if p.capturing {
+		return p.handleCapture(key, msg)
+	}
+
+	// Normal navigation
 	switch key {
 	case "j", "down":
-		if p.contextIdx < len(keybindingContexts)-1 {
-			p.contextIdx++
-			p.scrollOffset = 0
+		ctx := p.keymap.Contexts[p.contextIdx]
+		if p.bindingIdx < len(ctx.Bindings)-1 {
+			p.bindingIdx++
 		}
 	case "k", "up":
-		if p.contextIdx > 0 {
-			p.contextIdx--
-			p.scrollOffset = 0
+		if p.bindingIdx > 0 {
+			p.bindingIdx--
 		}
 	case "h", "left":
 		return nil // signal: go to sidebar
+
+	case "enter", "l", "right":
+		// Enter capture mode for selected binding
+		p.capturing = true
+
+	case "r":
+		// Reset selected binding to default
+		p.resetBinding()
+
+	case "R":
+		// Reset all bindings to defaults
+		p.resetAll()
 	}
+
 	return nil
+}
+
+func (p *keybindingsPage) handleCapture(key string, msg tea.KeyMsg) tea.Cmd {
+	// Esc cancels capture
+	if msg.Type == tea.KeyEscape {
+		p.capturing = false
+		return nil
+	}
+
+	// Don't allow binding tab or shift+tab (used for navigation)
+	if msg.Type == tea.KeyTab || msg.Type == tea.KeyShiftTab {
+		return nil
+	}
+
+	ctx := p.keymap.Contexts[p.contextIdx]
+	binding := ctx.Bindings[p.bindingIdx]
+
+	// Check for conflicts in the same context
+	conflictAction := p.keymap.ActionFor(ctx.Context, key)
+	if conflictAction != "" && conflictAction != binding.Action {
+		p.capturing = false
+		p.conflict = &keybindingConflict{
+			NewKey:         key,
+			ConflictAction: conflictAction,
+			ConflictDesc:   p.keymap.DescFor(ctx.Context, conflictAction),
+		}
+		return nil
+	}
+
+	// Apply the binding
+	p.keymap.SetBinding(ctx.Context, binding.Action, []string{key})
+	p.capturing = false
+	p.dirty = true
+
+	return nil
+}
+
+func (p *keybindingsPage) handleConflict(key string) tea.Cmd {
+	switch key {
+	case "enter":
+		// Swap bindings
+		ctx := p.keymap.Contexts[p.contextIdx]
+		currentBinding := ctx.Bindings[p.bindingIdx]
+
+		// Get the current key of the binding being changed
+		oldKeys := p.keymap.KeysFor(ctx.Context, currentBinding.Action)
+
+		// Set the new key on the selected binding
+		p.keymap.SetBinding(ctx.Context, currentBinding.Action, []string{p.conflict.NewKey})
+
+		// Give the conflicting action the old keys
+		if len(oldKeys) > 0 {
+			p.keymap.SetBinding(ctx.Context, p.conflict.ConflictAction, oldKeys)
+		}
+
+		p.conflict = nil
+		p.dirty = true
+
+	case "esc":
+		p.conflict = nil
+	}
+
+	return nil
+}
+
+func (p *keybindingsPage) resetBinding() {
+	ctx := p.keymap.Contexts[p.contextIdx]
+	binding := ctx.Bindings[p.bindingIdx]
+
+	defaults := DefaultKeymap()
+	defaultKeys := defaults.KeysFor(ctx.Context, binding.Action)
+	if len(defaultKeys) > 0 {
+		p.keymap.SetBinding(ctx.Context, binding.Action, defaultKeys)
+		p.dirty = true
+	}
+}
+
+func (p *keybindingsPage) resetAll() {
+	defaults := DefaultKeymap()
+	for _, cb := range defaults.Contexts {
+		for _, b := range cb.Bindings {
+			keys := make([]string, len(b.Keys))
+			copy(keys, b.Keys)
+			p.keymap.SetBinding(cb.Context, b.Action, keys)
+		}
+	}
+	p.dirty = true
 }
 
 func (p *keybindingsPage) View(width, height int, theme *Theme) string {
@@ -166,11 +230,11 @@ func (p *keybindingsPage) renderContextList(listWidth, height int) string {
 	sb.WriteString(p.theme.Dimmed.Render(safeRepeat("\u2500", listWidth)))
 	sb.WriteString("\n")
 
-	for i, ctx := range keybindingContexts {
+	for i, ctx := range p.keymap.Contexts {
 		if i == p.contextIdx {
-			sb.WriteString(p.theme.Selected.Render(fmt.Sprintf(" \u25B8 %s", ctx.Name)))
+			sb.WriteString(p.theme.Selected.Render(fmt.Sprintf(" \u25B8 %s", ctx.Label)))
 		} else {
-			sb.WriteString(p.theme.Normal.Render(fmt.Sprintf("   %s", ctx.Name)))
+			sb.WriteString(p.theme.Normal.Render(fmt.Sprintf("   %s", ctx.Label)))
 		}
 		sb.WriteString("\n")
 	}
@@ -194,21 +258,66 @@ func (p *keybindingsPage) renderContextList(listWidth, height int) string {
 func (p *keybindingsPage) renderShortcuts(shortcutsWidth, height int) string {
 	var sb strings.Builder
 
-	if p.contextIdx >= len(keybindingContexts) {
+	if p.contextIdx >= len(p.keymap.Contexts) {
 		return ""
 	}
 
-	ctx := keybindingContexts[p.contextIdx]
+	ctx := p.keymap.Contexts[p.contextIdx]
 
-	sb.WriteString(p.theme.Title.Render(ctx.Name))
+	sb.WriteString(p.theme.Title.Render(ctx.Label))
 	sb.WriteString("\n")
 	sb.WriteString(p.theme.Dimmed.Render(safeRepeat("\u2500", shortcutsWidth-2)))
 	sb.WriteString("\n\n")
 
 	keyColWidth := 16
-	for _, b := range ctx.Bindings {
-		keyStr := p.theme.Selected.Width(keyColWidth).Render(b.Key)
-		descStr := p.theme.Normal.Render(b.Desc)
+	descColWidth := shortcutsWidth - keyColWidth - 4
+
+	for i, b := range ctx.Bindings {
+		keyDisplay := formatKeys(b.Keys)
+		isSelected := i == p.bindingIdx
+		isCustomized := p.keymap.IsCustomized(ctx.Context, b.Action)
+
+		var keyStr string
+		var descStr string
+
+		switch {
+		case isSelected && p.capturing:
+			// Show capture prompt
+			keyStr = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#FFCC00")).
+				Width(keyColWidth).
+				Render("...")
+			descStr = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FFCC00")).
+				Width(descColWidth).
+				Render("Press new key")
+		case isSelected && p.conflict != nil:
+			// Show conflict warning
+			keyStr = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(p.theme.Error).
+				Width(keyColWidth).
+				Render(displayKey(p.conflict.NewKey))
+			descStr = lipgloss.NewStyle().
+				Foreground(p.theme.Error).
+				Width(descColWidth).
+				Render(fmt.Sprintf("Conflicts with: %s", p.conflict.ConflictDesc))
+		case isSelected:
+			keyStr = p.theme.Selected.Width(keyColWidth).Render(keyDisplay)
+			descStr = p.theme.Selected.Width(descColWidth).Render(b.Desc)
+		case isCustomized:
+			keyStr = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(p.theme.Accent).
+				Width(keyColWidth).
+				Render(keyDisplay)
+			descStr = p.theme.Normal.Width(descColWidth).Render(b.Desc)
+		default:
+			keyStr = p.theme.Normal.Width(keyColWidth).Render(keyDisplay)
+			descStr = p.theme.Dimmed.Width(descColWidth).Render(b.Desc)
+		}
+
 		sb.WriteString(keyStr)
 		sb.WriteString(descStr)
 		sb.WriteString("\n")

@@ -79,6 +79,73 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
+func TestConfigValidate_Keybindings(t *testing.T) {
+	tests := []struct {
+		name    string
+		kb      map[string]map[string]string
+		wantErr bool
+	}{
+		{
+			name:    "nil keybindings is valid",
+			kb:      nil,
+			wantErr: false,
+		},
+		{
+			name: "valid overrides",
+			kb: map[string]map[string]string{
+				"global": {"quit": "Q"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "empty context name",
+			kb: map[string]map[string]string{
+				"": {"quit": "Q"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty action name",
+			kb: map[string]map[string]string{
+				"global": {"": "Q"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty key binding",
+			kb: map[string]map[string]string{
+				"global": {"quit": ""},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Keybindings = tt.kb
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestConfigThemePreset(t *testing.T) {
+	cfg := DefaultConfig()
+	// Default should be empty (which means "default" theme)
+	if cfg.Preferences.ThemePreset != "" {
+		t.Errorf("Default ThemePreset should be empty, got %q", cfg.Preferences.ThemePreset)
+	}
+
+	// Setting it should work
+	cfg.Preferences.ThemePreset = "nord"
+	if cfg.Preferences.ThemePreset != "nord" {
+		t.Errorf("ThemePreset should be 'nord', got %q", cfg.Preferences.ThemePreset)
+	}
+}
+
 func TestGetEditor(t *testing.T) {
 	tests := []struct {
 		name          string

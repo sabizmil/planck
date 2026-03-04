@@ -10,13 +10,14 @@ import (
 
 // Config represents the planck configuration
 type Config struct {
-	Agents        map[string]AgentConfig `toml:"agents"`
-	Preferences   Preferences            `toml:"preferences"`
-	Notifications Notifications          `toml:"notifications"`
-	Execution     Execution              `toml:"execution"`
-	Planning      Planning               `toml:"planning"`
-	Session       Session                `toml:"session"`
-	MarkdownStyle MarkdownStyle          `toml:"markdown_style"`
+	Agents        map[string]AgentConfig       `toml:"agents"`
+	Preferences   Preferences                  `toml:"preferences"`
+	Notifications Notifications                `toml:"notifications"`
+	Execution     Execution                    `toml:"execution"`
+	Planning      Planning                     `toml:"planning"`
+	Session       Session                      `toml:"session"`
+	MarkdownStyle MarkdownStyle                `toml:"markdown_style"`
+	Keybindings   map[string]map[string]string `toml:"keybindings"`
 
 	// Runtime fields (not from config file)
 	WorkDir    string `toml:"-"`
@@ -38,6 +39,7 @@ type Preferences struct {
 	TmuxPrefix   string `toml:"tmux_prefix"`
 	SpinnerStyle string `toml:"spinner_style"`
 	SidebarWidth int    `toml:"sidebar_width"`
+	ThemePreset  string `toml:"theme_preset"`
 }
 
 // MarkdownStyle configures the markdown rendering style
@@ -205,6 +207,22 @@ func (c *Config) Validate() error {
 	validBackends := map[string]bool{"auto": true, "tmux": true, "pty": true}
 	if c.Session.Backend != "" && !validBackends[c.Session.Backend] {
 		return fmt.Errorf("invalid session backend: %s", c.Session.Backend)
+	}
+
+	// Validate keybinding overrides (basic structure checks;
+	// action/context validity is checked at the app layer via Keymap.ApplyOverrides)
+	for ctx, actions := range c.Keybindings {
+		if ctx == "" {
+			return fmt.Errorf("keybindings: empty context name")
+		}
+		for action, keys := range actions {
+			if action == "" {
+				return fmt.Errorf("keybindings[%s]: empty action name", ctx)
+			}
+			if keys == "" {
+				return fmt.Errorf("keybindings[%s][%s]: empty key binding", ctx, action)
+			}
+		}
 	}
 
 	return nil

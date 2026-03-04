@@ -106,7 +106,7 @@ func (a *App) recoverSessions() tea.Cmd {
 		}
 
 		// Create panel
-		panel := ui.NewPTYPanel(a.theme)
+		panel := ui.NewPTYPanel(a.theme, a.keymap)
 		contentHeight := a.height - 4
 		if contentHeight < 1 {
 			contentHeight = 24 // default before first resize
@@ -114,14 +114,15 @@ func (a *App) recoverSessions() tea.Cmd {
 		panel.SetSize(a.width, contentHeight)
 
 		tab := &AgentTab{
-			id:          dbSess.ID,
-			agentKey:    dbSess.AgentKey,
-			baseLabel:   baseLabel,
-			customTitle: dbSess.CustomTitle,
-			instanceNum: instanceNum,
-			session:     sess,
-			panel:       panel,
-			agentCfg:    agentCfg,
+			id:             dbSess.ID,
+			agentKey:       dbSess.AgentKey,
+			baseLabel:      baseLabel,
+			customTitle:    dbSess.CustomTitle,
+			titleFromInput: dbSess.CustomTitle != "",
+			instanceNum:    instanceNum,
+			session:        sess,
+			panel:          panel,
+			agentCfg:       agentCfg,
 		}
 
 		// Show panel

@@ -7,7 +7,7 @@ import (
 
 func TestEditor_RenderViewMode_SmallWidth(t *testing.T) {
 	theme := DefaultTheme()
-	editor := NewEditor(theme)
+	editor := NewEditor(theme, DefaultKeymap())
 
 	// Set content
 	editor.SetContent("test.md", "This is a test line that is fairly long")
@@ -27,7 +27,7 @@ func TestEditor_RenderViewMode_SmallWidth(t *testing.T) {
 
 func TestEditor_RenderEditMode_SmallWidth(t *testing.T) {
 	theme := DefaultTheme()
-	editor := NewEditor(theme)
+	editor := NewEditor(theme, DefaultKeymap())
 
 	// Set content and enter edit mode
 	editor.SetContent("test.md", "This is a test line that is fairly long")
@@ -49,7 +49,7 @@ func TestEditor_RenderEditMode_SmallWidth(t *testing.T) {
 
 func TestEditor_RenderLineWithCursor_SmallWidth(t *testing.T) {
 	theme := DefaultTheme()
-	editor := NewEditor(theme)
+	editor := NewEditor(theme, DefaultKeymap())
 
 	// Set up editor state
 	editor.SetContent("test.md", "This is a test line")
@@ -82,7 +82,7 @@ func TestEditor_RenderLineWithCursor_SmallWidth(t *testing.T) {
 
 func TestEditor_ZeroWidthNoPanic(t *testing.T) {
 	theme := DefaultTheme()
-	editor := NewEditor(theme)
+	editor := NewEditor(theme, DefaultKeymap())
 
 	// Simulate the state before any WindowSizeMsg is received
 	// width and height are 0 by default
@@ -102,7 +102,7 @@ func TestEditor_ZeroWidthNoPanic(t *testing.T) {
 
 func TestEditor_LongLinesRendering(t *testing.T) {
 	theme := DefaultTheme()
-	editor := NewEditor(theme)
+	editor := NewEditor(theme, DefaultKeymap())
 
 	// Create content with very long lines
 	longLine := "This is a very long line that should be wrapped when the width is small. " +
@@ -190,7 +190,7 @@ func TestWrapLine(t *testing.T) {
 
 func TestEditor_WrappedCursorNavigation(t *testing.T) {
 	theme := DefaultTheme()
-	editor := NewEditor(theme)
+	editor := NewEditor(theme, DefaultKeymap())
 
 	// A line that will wrap at width 30 (maxLineWidth ~20 after gutter)
 	editor.SetContent("test.md", "one two three four five six seven eight nine ten")
@@ -221,7 +221,7 @@ func TestEditor_WrappedCursorNavigation(t *testing.T) {
 
 func TestEditor_SetSize(t *testing.T) {
 	theme := DefaultTheme()
-	editor := NewEditor(theme)
+	editor := NewEditor(theme, DefaultKeymap())
 
 	tests := []struct {
 		width  int
@@ -244,7 +244,7 @@ func TestEditor_SetSize(t *testing.T) {
 
 func newTestEditor(content string) *Editor {
 	theme := DefaultTheme()
-	e := NewEditor(theme)
+	e := NewEditor(theme, DefaultKeymap())
 	e.SetContent("test.md", content)
 	e.mode = EditorModeEdit
 	e.parseLines()

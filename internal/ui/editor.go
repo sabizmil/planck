@@ -58,14 +58,18 @@ type Editor struct {
 	// Screen position (for mouse coordinate translation)
 	screenX int
 	screenY int
+
+	// Keymap reference
+	keymap *Keymap
 }
 
 // NewEditor creates a new editor
-func NewEditor(theme *Theme) *Editor {
+func NewEditor(theme *Theme, keymap *Keymap) *Editor {
 	renderer, _ := NewMarkdownRenderer(80)
 
 	return &Editor{
 		theme:    theme,
+		keymap:   keymap,
 		renderer: renderer,
 		mode:     EditorModeView,
 	}
@@ -102,15 +106,17 @@ func (e *Editor) Update(msg tea.Msg) (*Editor, tea.Cmd) {
 }
 
 func (e *Editor) updateViewMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
-	switch msg.String() {
-	case "e":
-		// Enter edit mode
+	key := msg.String()
+	km := e.keymap
+
+	switch {
+	case km.Matches(ContextEditor, ActionEditorEdit, key):
 		e.mode = EditorModeEdit
 		e.cursorRow = 0
 		e.cursorCol = 0
 		e.parseLines()
 
-	case "down", "j":
+	case km.Matches(ContextEditor, ActionEditorDown, key):
 		e.viewOffset++
 		maxOffset := e.lineCount - e.visibleLines()
 		if e.viewOffset > maxOffset {
@@ -120,13 +126,13 @@ func (e *Editor) updateViewMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 			e.viewOffset = 0
 		}
 
-	case "up", "k":
+	case km.Matches(ContextEditor, ActionEditorUp, key):
 		e.viewOffset--
 		if e.viewOffset < 0 {
 			e.viewOffset = 0
 		}
 
-	case "pgdown", "ctrl+d":
+	case km.Matches(ContextEditor, ActionEditorPageDown, key):
 		e.viewOffset += e.visibleLines() / 2
 		maxOffset := e.lineCount - e.visibleLines()
 		if e.viewOffset > maxOffset {
@@ -136,16 +142,16 @@ func (e *Editor) updateViewMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 			e.viewOffset = 0
 		}
 
-	case "pgup", "ctrl+u":
+	case km.Matches(ContextEditor, ActionEditorPageUp, key):
 		e.viewOffset -= e.visibleLines() / 2
 		if e.viewOffset < 0 {
 			e.viewOffset = 0
 		}
 
-	case "home", "g":
+	case km.Matches(ContextEditor, ActionEditorTop, key):
 		e.viewOffset = 0
 
-	case "end", "G":
+	case km.Matches(ContextEditor, ActionEditorBottom, key):
 		e.viewOffset = e.lineCount - e.visibleLines()
 		if e.viewOffset < 0 {
 			e.viewOffset = 0

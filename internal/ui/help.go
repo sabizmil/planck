@@ -9,7 +9,9 @@ import (
 
 // Help displays the help overlay
 type Help struct {
-	theme   *Theme
+	theme  *Theme
+	keymap *Keymap
+
 	visible bool
 	width   int
 	height  int
@@ -17,9 +19,10 @@ type Help struct {
 }
 
 // NewHelp creates a new help overlay
-func NewHelp(theme *Theme) *Help {
+func NewHelp(theme *Theme, keymap *Keymap) *Help {
 	return &Help{
-		theme: theme,
+		theme:  theme,
+		keymap: keymap,
 	}
 }
 
@@ -97,42 +100,22 @@ func (h *Help) renderHelpContent() string {
 	sb.WriteString(h.theme.Dimmed.Render(strings.Repeat("═", 50)))
 	sb.WriteString("\n\n")
 
-	// Global
-	sb.WriteString(h.theme.Title.Render("Global"))
-	sb.WriteString("\n")
-	sb.WriteString(h.renderKeySection([][]string{
-		{"Shift+Tab", "Next tab"},
-		{"Alt+1-9", "Jump to tab by number"},
-		{"Click tab", "Switch to tab"},
-		{"1-9", "Jump to tab (normal mode)"},
-		{"a", "Create new agent tab"},
-		{"x / Ctrl+X", "Close current agent tab"},
-		{"s", "Settings"},
-		{"?", "Toggle this help"},
-		{"q / Ctrl+C ×2", "Quit"},
-	}))
-	sb.WriteString("\n")
+	km := h.keymap
 
-	// File List
-	sb.WriteString(h.theme.Title.Render("File List (Planning Tab)"))
-	sb.WriteString("\n")
-	sb.WriteString(h.renderKeySection([][]string{
-		{"j / ↓", "Move down"},
-		{"k / ↑", "Move up"},
-		{"Enter", "Open file in editor"},
-		{"→ / l", "Expand folder"},
-		{"← / h", "Collapse folder"},
-		{"e", "Enter edit mode"},
-		{"n", "New file"},
-		{"c", "Toggle complete"},
-		{"d", "Delete file/folder"},
-		{"m", "Move file/folder"},
-		{"r", "Refresh file list"},
-		{"o", "Switch folder"},
-	}))
-	sb.WriteString("\n")
+	// Render each keymap context
+	for _, cb := range km.Contexts {
+		sb.WriteString(h.theme.Title.Render(cb.Label))
+		sb.WriteString("\n")
 
-	// Edit Mode
+		var entries [][]string
+		for _, b := range cb.Bindings {
+			entries = append(entries, []string{formatKeys(b.Keys), b.Desc})
+		}
+		sb.WriteString(h.renderKeySection(entries))
+		sb.WriteString("\n")
+	}
+
+	// Static entries for non-customizable keys
 	sb.WriteString(h.theme.Title.Render("Edit Mode"))
 	sb.WriteString("\n")
 	sb.WriteString(h.renderKeySection([][]string{
@@ -143,29 +126,6 @@ func (h *Help) renderHelpContent() string {
 		{"Alt+Shift+Arrow", "Select by word"},
 		{"Shift+Home/End", "Select to line start/end"},
 		{"Shift+Click", "Select from cursor to click"},
-	}))
-	sb.WriteString("\n")
-
-	// Agent Tab
-	sb.WriteString(h.theme.Title.Render("Agent Tab (Input Mode)"))
-	sb.WriteString("\n")
-	sb.WriteString(h.renderKeySection([][]string{
-		{"Tab", "Sent to agent (autocomplete)"},
-		{"Shift+Tab", "Next tab"},
-		{"Alt+1-9", "Jump to tab"},
-		{"Ctrl+\\", "Exit to normal mode"},
-		{"Ctrl+X", "Close tab"},
-		{"Scroll", "Browse output history"},
-	}))
-	sb.WriteString("\n")
-
-	// Agent normal mode
-	sb.WriteString(h.theme.Title.Render("Agent Tab (Normal Mode)"))
-	sb.WriteString("\n")
-	sb.WriteString(h.renderKeySection([][]string{
-		{"i / Enter", "Enter input mode"},
-		{"x", "Close tab"},
-		{"a", "New agent tab"},
 	}))
 	sb.WriteString("\n")
 

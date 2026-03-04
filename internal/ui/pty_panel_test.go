@@ -8,7 +8,7 @@ import (
 
 func TestPTYPanelTabPassthroughInInputMode(t *testing.T) {
 	theme := DefaultTheme()
-	panel := NewPTYPanel(theme)
+	panel := NewPTYPanel(theme, DefaultKeymap())
 	panel.Show("test-task", "Test", "test-session")
 	panel.SetSize(80, 24)
 	panel.EnterInputMode()
@@ -34,7 +34,7 @@ func TestPTYPanelTabPassthroughInInputMode(t *testing.T) {
 
 func TestPTYPanelShiftTabBlockedInInputMode(t *testing.T) {
 	theme := DefaultTheme()
-	panel := NewPTYPanel(theme)
+	panel := NewPTYPanel(theme, DefaultKeymap())
 	panel.Show("test-task", "Test", "test-session")
 	panel.SetSize(80, 24)
 	panel.EnterInputMode()
@@ -50,7 +50,7 @@ func TestPTYPanelShiftTabBlockedInInputMode(t *testing.T) {
 
 func TestPTYPanelTabNotForwardedInNormalMode(t *testing.T) {
 	theme := DefaultTheme()
-	panel := NewPTYPanel(theme)
+	panel := NewPTYPanel(theme, DefaultKeymap())
 	panel.Show("test-task", "Test", "test-session")
 	panel.SetSize(80, 24)
 	// Don't enter input mode — stay in normal mode
@@ -66,7 +66,7 @@ func TestPTYPanelTabNotForwardedInNormalMode(t *testing.T) {
 
 func TestPTYPanelAltDigitBlockedInInputMode(t *testing.T) {
 	theme := DefaultTheme()
-	panel := NewPTYPanel(theme)
+	panel := NewPTYPanel(theme, DefaultKeymap())
 	panel.Show("test-task", "Test", "test-session")
 	panel.SetSize(80, 24)
 	panel.EnterInputMode()

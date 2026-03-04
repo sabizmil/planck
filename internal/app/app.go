@@ -53,7 +53,8 @@ type AgentTab struct {
 
 	// Input buffer: accumulates user keystrokes to derive a tab title
 	// when the child process doesn't send one via OSC.
-	inputBuf []rune
+	inputBuf       []rune
+	titleFromInput bool // true if customTitle was set from user input (not OSC)
 
 	// Hook-based state detection (Claude Code agents)
 	stateFile string // path to hook state file (empty if not a Claude agent)
@@ -73,6 +74,7 @@ type App struct {
 
 	// UI components
 	theme    *ui.Theme
+	keymap   *ui.Keymap
 	tabs     *ui.TabBar
 	fileList *ui.FileList
 	editor   *ui.Editor
@@ -132,15 +134,21 @@ func New(cfg *config.Config, configDir, folder string, backend session.Interacti
 		return nil, fmt.Errorf("create workspace: %w", err)
 	}
 
-	// Create theme and UI components
-	theme := ui.DefaultTheme()
+	// Create keymap and apply user overrides
+	keymap := ui.DefaultKeymap()
+	if cfg.Keybindings != nil {
+		keymap.ApplyOverrides(cfg.Keybindings)
+	}
+
+	// Create theme from preset (falls back to default)
+	theme := ui.ThemeFromPreset(cfg.Preferences.ThemePreset)
 
 	// Build style registry and load persisted config
 	registry := ui.NewStyleRegistry()
 	styleCfg := loadMarkdownStyleFromConfig(cfg)
 	styleJSON := registry.ComposeStyle(styleCfg)
 
-	editor := ui.NewEditor(theme)
+	editor := ui.NewEditor(theme, keymap)
 	editor.SetMarkdownStyle(styleJSON)
 
 	// Build settings configs from config
@@ -179,12 +187,13 @@ func New(cfg *config.Config, configDir, folder string, backend session.Interacti
 		workspace:       ws,
 		sessionBackend:  backend,
 		theme:           theme,
+		keymap:          keymap,
 		tabs:            ui.NewTabBar(theme),
 		fileList:        ui.NewFileList(theme),
 		editor:          editor,
 		dialog:          ui.NewDialog(theme),
-		help:            ui.NewHelp(theme),
-		settings:        ui.NewSettings(theme, registry, styleCfg, generalCfg, agentsCfg, cfg.Preferences.SpinnerStyle),
+		help:            ui.NewHelp(theme, keymap),
+		settings:        ui.NewSettings(theme, keymap, registry, styleCfg, generalCfg, agentsCfg, cfg.Preferences.SpinnerStyle, cfg.Preferences.ThemePreset),
 		styleRegistry:   registry,
 		activeTabIdx:    0,
 		focus:           FocusFileList,
@@ -423,6 +432,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	}
 
+	// Handle theme changes from settings panel
+	if msg, ok := msg.(ui.ThemeChangedMsg); ok {
+		a.theme = msg.Theme
+		a.config.Preferences.ThemePreset = msg.PresetName
+		_ = a.config.Save()
+		return a, nil
+	}
+
+	// Handle keybinding changes from settings panel
+	if msg, ok := msg.(ui.KeybindingsChangedMsg); ok {
+		a.keymap = msg.Keymap
+		// Persist overrides to config
+		a.config.Keybindings = a.keymapOverrides()
+		_ = a.config.Save()
+		return a, nil
+	}
+
 	// Handle PTY messages BEFORE overlay checks — polling must never be
 	// interrupted by dialogs, help, or folder picker, otherwise the polling
 	// chain breaks and the tab goes permanently silent.
@@ -482,13 +508,19 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			tab.panel.SetContent(msg.Content)
 			// Update tab title if the child process set a meaningful one via OSC.
-			// Once we have a good title, keep it — don't let resets overwrite it.
+			// Skip generic program names (e.g. "Claude Code") when we already
+			// have a descriptive title derived from user input.
 			if title := sanitizeTabTitle(msg.Title); title != "" && title != tab.customTitle {
-				tab.customTitle = title
-				a.syncTabBar()
-				// Persist title for recovery
-				if tab.session != nil {
-					_ = a.store.UpdateSessionTitle(tab.session.ID, title)
+				if tab.titleFromInput && isGenericOSCTitle(title, tab.baseLabel) {
+					// Don't overwrite a user-input title with a generic program name.
+				} else {
+					tab.customTitle = title
+					tab.titleFromInput = false // OSC-derived, not from input
+					a.syncTabBar()
+					// Persist title for recovery
+					if tab.session != nil {
+						_ = a.store.UpdateSessionTitle(tab.session.ID, title)
+					}
 				}
 			}
 			cmds = append(cmds, a.pollAgentTab(tab))
@@ -663,36 +695,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a *App) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 	key := msg.String()
+	km := a.keymap
+	inEdit := a.editor.Mode() == ui.EditorModeEdit
+	inPTY := a.isInPTYInputMode()
 
-	// Global keys
-	switch key {
-	case "?":
-		if a.editor.Mode() == ui.EditorModeEdit {
-			return nil
-		}
-		if a.isInPTYInputMode() {
-			return nil
-		}
-		a.help.Toggle()
-		return nil
-
-	case "q":
-		if a.editor.Mode() == ui.EditorModeEdit {
-			return nil
-		}
-		if a.isInPTYInputMode() {
-			return nil
-		}
-		a.killAllSessions()
-		a.quitting = true
-		return tea.Quit
-
-	case "shift+tab":
-		// Shift+Tab cycles forward through tabs — works globally (even in input mode)
+	// Global keys that work even in input mode
+	if km.Matches(ui.ContextGlobal, ui.ActionNextTab, key) {
 		return a.cycleTab(1)
-
-	case "ctrl+x":
-		// Close agent tab — works even in input mode
+	}
+	if km.Matches(ui.ContextGlobal, ui.ActionCloseTab, key) {
 		if a.isOnAgentTab() {
 			if panel := a.activePanel(); panel != nil {
 				panel.ExitInputMode()
@@ -700,55 +711,54 @@ func (a *App) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 			return a.closeCurrentAgentTab()
 		}
 		return nil
-
-	case "s":
-		if a.editor.Mode() == ui.EditorModeEdit {
-			return nil
-		}
-		if a.isInPTYInputMode() {
-			return nil
-		}
-		a.settings.Toggle()
-		// Start spinner tick for settings live preview if no running tabs
-		if a.settings.IsVisible() && !a.tabs.HasRunningTabs() {
-			return a.tabs.Tick()
-		}
-		return nil
-
-	case "a":
-		if a.editor.Mode() == ui.EditorModeEdit {
-			return nil
-		}
-		if a.isInPTYInputMode() {
-			return nil
-		}
-		return a.createAgentTab()
-
-	case "x":
-		if a.editor.Mode() == ui.EditorModeEdit {
-			return nil
-		}
-		if a.isInPTYInputMode() {
-			return nil
-		}
-		return a.closeCurrentAgentTab()
 	}
 
 	// Alt+1-9 for tab switching — works in all modes (including input mode)
 	if key >= "alt+1" && key <= "alt+9" {
-		idx := int(key[len(key)-1]-'0') - 1 // "alt+1" → 0, "alt+2" → 1, etc.
+		idx := int(key[len(key)-1]-'0') - 1
 		return a.switchToTab(idx)
+	}
+
+	// Keys that are suppressed in edit mode or PTY input mode
+	if inEdit || inPTY {
+		// Number keys 1-9 for tab switching (normal mode only)
+		if key >= "1" && key <= "9" {
+			return nil
+		}
+		// Tab-specific keys
+		if a.isOnPlanningTab() {
+			return a.handlePlanningTabKey(key, msg)
+		}
+		return nil
+	}
+
+	// Normal mode global keys
+	if km.Matches(ui.ContextGlobal, ui.ActionToggleHelp, key) {
+		a.help.Toggle()
+		return nil
+	}
+	if km.Matches(ui.ContextGlobal, ui.ActionQuit, key) {
+		a.killAllSessions()
+		a.quitting = true
+		return tea.Quit
+	}
+	if km.Matches(ui.ContextGlobal, ui.ActionSettings, key) {
+		a.settings.Toggle()
+		if a.settings.IsVisible() && !a.tabs.HasRunningTabs() {
+			return a.tabs.Tick()
+		}
+		return nil
+	}
+	if km.Matches(ui.ContextGlobal, ui.ActionCreateAgent, key) {
+		return a.createAgentTab()
+	}
+	if km.Matches(ui.ContextGlobal, ui.ActionCloseAgent, key) {
+		return a.closeCurrentAgentTab()
 	}
 
 	// Number keys 1-9 for tab switching (normal mode only)
 	if key >= "1" && key <= "9" {
-		if a.editor.Mode() == ui.EditorModeEdit {
-			return nil
-		}
-		if a.isInPTYInputMode() {
-			return nil
-		}
-		idx := int(key[0]-'0') - 1 // "1" → 0, "2" → 1, etc.
+		idx := int(key[0]-'0') - 1
 		return a.switchToTab(idx)
 	}
 
@@ -872,7 +882,7 @@ func (a *App) launchAgentTab(agentKey string) tea.Cmd {
 	baseLabel := a.config.GetAgentLabel(agentKey)
 
 	// Create PTY panel
-	panel := ui.NewPTYPanel(a.theme)
+	panel := ui.NewPTYPanel(a.theme, a.keymap)
 	contentHeight := a.height - 4
 	panel.SetSize(a.width, contentHeight)
 
@@ -1071,6 +1081,7 @@ func (a *App) trackInputForTitle(tab *AgentTab, data []byte) {
 						title = string([]rune(title)[:maxTabTitleLen-1]) + "..."
 					}
 					tab.customTitle = title
+					tab.titleFromInput = true
 					a.syncTabBar()
 				}
 				tab.inputBuf = nil
@@ -1132,6 +1143,19 @@ func sanitizeTabTitle(raw string) string {
 	}
 
 	return title
+}
+
+// isGenericOSCTitle reports whether oscTitle is a generic/default program title
+// that shouldn't overwrite a more descriptive user-input-derived title.
+// It returns true when the OSC title is a case-insensitive match or substring
+// of baseLabel (or vice versa), e.g. "Claude Code" vs "Claude Code" or "Claude".
+func isGenericOSCTitle(oscTitle, baseLabel string) bool {
+	osc := strings.ToLower(strings.TrimSpace(oscTitle))
+	base := strings.ToLower(strings.TrimSpace(baseLabel))
+	if osc == "" || base == "" {
+		return false
+	}
+	return strings.Contains(osc, base) || strings.Contains(base, osc)
 }
 
 // syncTabBar rebuilds the tab bar to match current agent tabs
@@ -1254,17 +1278,17 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	km := a.keymap
+
 	if a.focus == FocusFileList {
-		switch key {
-		case "enter":
-			// Load selected file (no-op on directories)
+		switch {
+		case km.Matches(ui.ContextFileList, ui.ActionOpenFile, key):
 			if file := a.fileList.SelectedFile(); file != nil {
 				a.loadFile(file.Name)
 				a.prevCursor = a.fileList.Cursor()
 			}
 
-		case "e":
-			// Enter edit mode on current file
+		case km.Matches(ui.ContextFileList, ui.ActionEditMode, key):
 			if a.editor.FileName() != "" {
 				a.editor.EnterEditMode()
 				a.focus = FocusEditor
@@ -1272,8 +1296,7 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 				a.fileList.SetFocused(false)
 			}
 
-		case "n":
-			// New file
+		case km.Matches(ui.ContextFileList, ui.ActionNewFile, key):
 			a.dialog.ShowInput("New File", "Enter file name:", func(result ui.DialogResult) {
 				if result.Confirmed && result.Input != "" {
 					name := result.Input
@@ -1288,9 +1311,8 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 				}
 			})
 
-		case "d", "D":
+		case km.Matches(ui.ContextFileList, ui.ActionDeleteFile, key):
 			if file := a.fileList.SelectedFile(); file != nil {
-				// Delete file
 				a.dialog.ShowConfirm(
 					"Delete File?",
 					fmt.Sprintf("Delete '%s'?", file.Name),
@@ -1307,13 +1329,11 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 					},
 				)
 			} else if dirPath := a.fileList.SelectedDirPath(); dirPath != "" {
-				// Delete folder
 				a.dialog.ShowConfirm(
 					"Delete Folder?",
 					fmt.Sprintf("Delete '%s' and all files inside?", dirPath),
 					func(result ui.DialogResult) {
 						if result.Confirmed {
-							// Clear editor if current file is inside the deleted folder
 							editorFile := a.editor.FileName()
 							if editorFile != "" && strings.HasPrefix(editorFile, dirPath+"/") {
 								a.editor.SetContent("", "")
@@ -1329,41 +1349,36 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 				)
 			}
 
-		case "l", "right":
+		case km.Matches(ui.ContextFileList, ui.ActionExpandFolder, key):
 			if a.fileList.IsSelectedDir() {
 				a.fileList.ExpandSelected()
 			}
 
-		case "h", "left":
+		case km.Matches(ui.ContextFileList, ui.ActionCollapseDir, key):
 			if a.fileList.IsSelectedDir() {
 				a.fileList.CollapseSelected()
 			}
 
-		case "c":
-			// Toggle file completion status
+		case km.Matches(ui.ContextFileList, ui.ActionToggleComplete, key):
 			if file := a.fileList.SelectedFile(); file != nil {
 				if err := a.workspace.ToggleFileStatus(file.Name); err != nil {
 					a.message = fmt.Sprintf("Error: %v", err)
 				} else {
 					a.refreshFiles()
-					// Reload editor if this file is currently displayed
 					if a.editor.FileName() == file.Name {
 						a.loadFile(file.Name)
 					}
 				}
 			}
 
-		case "m":
-			// Enter move mode
+		case km.Matches(ui.ContextFileList, ui.ActionMoveFile, key):
 			if a.fileList.SelectedPath() != "" {
 				a.fileList.EnterMoveMode()
 			}
 
-		case "r":
-			// Manual refresh
+		case km.Matches(ui.ContextFileList, ui.ActionRefresh, key):
 			a.refreshFiles()
 			a.message = "Files refreshed"
-
 		}
 	}
 
@@ -1606,6 +1621,50 @@ func (a *App) View() string {
 	return view
 }
 
+// keymapOverrides computes sparse overrides from the current keymap
+// by comparing against defaults (only changed bindings are persisted).
+func (a *App) keymapOverrides() map[string]map[string]string {
+	defaults := ui.DefaultKeymap()
+	overrides := make(map[string]map[string]string)
+
+	for _, cb := range a.keymap.Contexts {
+		for _, b := range cb.Bindings {
+			defaultKeys := defaults.KeysFor(cb.Context, b.Action)
+			currentKeys := a.keymap.KeysFor(cb.Context, b.Action)
+
+			// Check if different from default
+			if !sameKeys(currentKeys, defaultKeys) {
+				if overrides[string(cb.Context)] == nil {
+					overrides[string(cb.Context)] = make(map[string]string)
+				}
+				overrides[string(cb.Context)][string(b.Action)] = strings.Join(currentKeys, ",")
+			}
+		}
+	}
+
+	if len(overrides) == 0 {
+		return nil
+	}
+	return overrides
+}
+
+// sameKeys returns true if two key slices contain the same keys (order-insensitive).
+func sameKeys(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]bool, len(a))
+	for _, k := range a {
+		set[k] = true
+	}
+	for _, k := range b {
+		if !set[k] {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *App) renderStatusBar() string {
 	// Build status bar content
 	var leftContent string
@@ -1617,30 +1676,50 @@ func (a *App) renderStatusBar() string {
 		a.message = "" // Clear after showing
 	default:
 		// Show context hints
+		km := a.keymap
 		if a.isOnPlanningTab() {
 			if a.editor.Mode() == ui.EditorModeEdit {
 				leftContent = a.theme.KeyHint.Render("[Esc] save & exit  [Ctrl+S] save  [Shift+Arrow] select  [Alt+Arrow] word jump")
 			} else {
-				leftContent = a.theme.KeyHint.Render("[^|v] navigate  [e] edit  [n] new  [d] delete  [r] refresh  [a] agent  [s] settings  [Shift+Tab] next tab")
+				leftContent = a.theme.KeyHint.Render(
+					"[" + km.DisplayKeysFor(ui.ContextFileList, ui.ActionMoveDown) + "] navigate  " +
+						"[" + km.DisplayKeysFor(ui.ContextFileList, ui.ActionEditMode) + "] edit  " +
+						"[" + km.DisplayKeysFor(ui.ContextFileList, ui.ActionNewFile) + "] new  " +
+						"[" + km.DisplayKeysFor(ui.ContextFileList, ui.ActionDeleteFile) + "] delete  " +
+						"[" + km.DisplayKeysFor(ui.ContextFileList, ui.ActionRefresh) + "] refresh  " +
+						"[" + km.DisplayKeysFor(ui.ContextGlobal, ui.ActionCreateAgent) + "] agent  " +
+						"[" + km.DisplayKeysFor(ui.ContextGlobal, ui.ActionSettings) + "] settings  " +
+						"[" + km.DisplayKeysFor(ui.ContextGlobal, ui.ActionNextTab) + "] next tab")
 			}
 		} else {
 			panel := a.activePanel()
 			if panel != nil && panel.IsInputMode() {
-				leftContent = a.theme.KeyHint.Render("[Ctrl+\\] normal  [Ctrl+X] close  [Shift+Tab] next tab  [scroll] scrollback")
+				leftContent = a.theme.KeyHint.Render(
+					"[" + km.DisplayKeysFor(ui.ContextAgentInput, ui.ActionExitInput) + "] normal  " +
+						"[" + km.DisplayKeysFor(ui.ContextGlobal, ui.ActionCloseTab) + "] close  " +
+						"[" + km.DisplayKeysFor(ui.ContextGlobal, ui.ActionNextTab) + "] next tab  " +
+						"[scroll] scrollback")
 			} else {
-				leftContent = a.theme.KeyHint.Render("[i] interact  [a] new agent  [x] close  [Shift+Tab] next tab")
+				leftContent = a.theme.KeyHint.Render(
+					"[" + km.DisplayKeysFor(ui.ContextAgentNormal, ui.ActionEnterInput) + "] interact  " +
+						"[" + km.DisplayKeysFor(ui.ContextAgentNormal, ui.ActionAgentNew) + "] new agent  " +
+						"[" + km.DisplayKeysFor(ui.ContextAgentNormal, ui.ActionAgentClose) + "] close  " +
+						"[" + km.DisplayKeysFor(ui.ContextGlobal, ui.ActionNextTab) + "] next tab")
 			}
 		}
 	}
 
 	// Right side: help hint + version
+	km := a.keymap
 	var versionLabel string
 	if a.version == "dev" {
 		versionLabel = a.theme.VersionDev.Render("dev")
 	} else {
 		versionLabel = a.theme.Dimmed.Render(a.version)
 	}
-	rightContent := a.theme.Dimmed.Render("[?] help  [q] quit") + "  " + versionLabel
+	rightContent := a.theme.Dimmed.Render(
+		"["+km.DisplayKeysFor(ui.ContextGlobal, ui.ActionToggleHelp)+"] help  "+
+			"["+km.DisplayKeysFor(ui.ContextGlobal, ui.ActionQuit)+"] quit") + "  " + versionLabel
 
 	// Calculate spacing
 	leftWidth := lipgloss.Width(leftContent)

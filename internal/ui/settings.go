@@ -82,14 +82,15 @@ type Settings struct {
 }
 
 // NewSettings creates a new settings panel.
-func NewSettings(theme *Theme, registry *StyleRegistry, mdCfg MarkdownStyleConfig, generalCfg GeneralSettingsChangedMsg, agentsCfg map[string]AgentSettingsConfig, spinnerStyle string) *Settings {
+func NewSettings(theme *Theme, keymap *Keymap, registry *StyleRegistry, mdCfg MarkdownStyleConfig, generalCfg GeneralSettingsChangedMsg, agentsCfg map[string]AgentSettingsConfig, spinnerStyle, themePreset string) *Settings {
 	s := &Settings{
 		theme: theme,
 		categories: []settingsCategory{
 			{Name: "Markdown", Page: newMarkdownPage(theme, registry, mdCfg)},
 			{Name: "General", Page: newGeneralPage(theme, generalCfg)},
 			{Name: "Agents", Page: newAgentsPage(theme, agentsCfg)},
-			{Name: "Keys", Page: newKeybindingsPage(theme)},
+			{Name: "Keys", Page: newKeybindingsPage(theme, keymap)},
+			{Name: "Theme", Page: newThemePage(theme, themePreset)},
 			{Name: "Spinner", Page: newSpinnerPage(theme, spinnerStyle)},
 		},
 	}
