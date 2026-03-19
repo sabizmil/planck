@@ -55,6 +55,7 @@ const (
 	ActionToggleComplete Action = "toggle_complete"
 	ActionMoveFile       Action = "move_file"
 	ActionRefresh        Action = "refresh"
+	ActionExcludeDir     Action = "exclude_dir"
 )
 
 // --- Editor view mode actions ---
@@ -146,6 +147,7 @@ func DefaultKeymap() *Keymap {
 					{ActionToggleComplete, []string{"c"}, "Toggle complete"},
 					{ActionMoveFile, []string{"m"}, "Move file/folder"},
 					{ActionRefresh, []string{"r"}, "Refresh file list"},
+					{ActionExcludeDir, []string{"X"}, "Exclude folder"},
 				},
 			},
 			{

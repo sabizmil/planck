@@ -34,13 +34,15 @@ type File struct {
 
 // Workspace manages a folder of markdown files
 type Workspace struct {
-	folder  string
-	files   []*File
-	watcher *fsnotify.Watcher
+	folder      string
+	files       []*File
+	excludeDirs map[string]bool
+	watcher     *fsnotify.Watcher
 }
 
-// New creates a new workspace for the given folder
-func New(folder string) (*Workspace, error) {
+// New creates a new workspace for the given folder.
+// excludeDirs is a list of directory names to skip during file listing and watching.
+func New(folder string, excludeDirs []string) (*Workspace, error) {
 	absPath, err := filepath.Abs(folder)
 	if err != nil {
 		return nil, fmt.Errorf("resolve folder path: %w", err)
@@ -55,8 +57,14 @@ func New(folder string) (*Workspace, error) {
 		return nil, fmt.Errorf("not a directory: %s", absPath)
 	}
 
+	dirs := make(map[string]bool, len(excludeDirs))
+	for _, d := range excludeDirs {
+		dirs[d] = true
+	}
+
 	w := &Workspace{
-		folder: absPath,
+		folder:      absPath,
+		excludeDirs: dirs,
 	}
 
 	// Initial scan
@@ -70,6 +78,16 @@ func New(folder string) (*Workspace, error) {
 // Folder returns the workspace folder path
 func (w *Workspace) Folder() string {
 	return w.folder
+}
+
+// SetExcludeDirs updates the set of excluded directory names and refreshes the file list.
+func (w *Workspace) SetExcludeDirs(dirs []string) {
+	m := make(map[string]bool, len(dirs))
+	for _, d := range dirs {
+		m[d] = true
+	}
+	w.excludeDirs = m
+	_ = w.Refresh()
 }
 
 // Files returns all markdown files in the workspace
@@ -87,6 +105,9 @@ func (w *Workspace) Refresh() error {
 		}
 
 		if d.IsDir() {
+			if path != w.folder && w.excludeDirs[d.Name()] {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
@@ -491,22 +512,13 @@ func (w *Workspace) Watch() (<-chan struct{}, error) {
 		return nil, fmt.Errorf("create watcher: %w", err)
 	}
 
-	// Directories to skip entirely (heavy or internal — not useful for markdown watching)
-	skipDirs := map[string]bool{
-		".git": true, ".hg": true, ".svn": true,
-		"node_modules": true, "vendor": true, ".next": true,
-		"build": true, "dist": true, "__pycache__": true,
-	}
-
-	// Watch root folder and non-hidden, non-heavy subdirectories
+	// Watch root folder, skipping excluded subdirectories
 	err = filepath.WalkDir(w.folder, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
-			name := d.Name()
-			// Skip hidden dirs (except the root itself) and known heavy dirs
-			if path != w.folder && (strings.HasPrefix(name, ".") || skipDirs[name]) {
+			if path != w.folder && w.excludeDirs[d.Name()] {
 				return filepath.SkipDir
 			}
 			_ = watcher.Add(path)
@@ -534,7 +546,7 @@ func (w *Workspace) Watch() (<-chan struct{}, error) {
 				if event.Has(fsnotify.Create) {
 					if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
 						name := filepath.Base(event.Name)
-						if !strings.HasPrefix(name, ".") && !skipDirs[name] {
+						if !w.excludeDirs[name] {
 							_ = watcher.Add(event.Name)
 						}
 					}

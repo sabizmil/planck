@@ -15,7 +15,7 @@ import (
 type generalField struct {
 	Label    string
 	Section  string // optional section header before this field
-	Kind     string // "toggle", "cycle", "text"
+	Kind     string // "toggle", "cycle", "text", "number", "list"
 	Options  []string
 	HintText string // shown in info pane when selected
 }
@@ -35,6 +35,11 @@ var generalFields = []generalField{
 		Label:    "Sidebar Width",
 		Kind:     "number",
 		HintText: "Width of the file sidebar\nin characters (16–60).\n\nDrag the sidebar border\nwith the mouse to resize\ninteractively.",
+	},
+	{
+		Label:    "Excluded Dirs",
+		Kind:     "list",
+		HintText: "Directories hidden from\nthe sidebar and watcher.\n\nHidden dirs (starting\nwith .) are always\nexcluded.\n\n[n] add  [d] remove\n[j/k] navigate items",
 	},
 	{
 		Label:    "Session Backend",
@@ -70,6 +75,7 @@ type generalPage struct {
 	editor         string
 	bell           bool
 	sidebarWidth   int
+	excludeDirs    []string
 	backend        string
 	defaultScope   string
 	autoAdvance    bool
@@ -78,10 +84,17 @@ type generalPage struct {
 	// Navigation
 	selectedIdx int
 
-	// Text editing state
+	// Text editing state (for "text" kind fields)
 	editing   bool
 	editValue string
 	editCur   int // cursor position within editValue
+
+	// List editing state (for "list" kind fields, i.e. Excluded Dirs)
+	listActive    bool // true when navigating inside the list
+	listCursor    int
+	listAdding    bool   // true when typing a new entry
+	listEditValue string // new entry being typed
+	listEditCur   int    // cursor within new entry
 }
 
 func newGeneralPage(theme *Theme, cfg GeneralSettingsChangedMsg) *generalPage {
@@ -89,11 +102,14 @@ func newGeneralPage(theme *Theme, cfg GeneralSettingsChangedMsg) *generalPage {
 	if sw == 0 {
 		sw = 28
 	}
+	dirs := make([]string, len(cfg.ExcludeDirs))
+	copy(dirs, cfg.ExcludeDirs)
 	return &generalPage{
 		theme:          theme,
 		editor:         cfg.Editor,
 		bell:           cfg.Bell,
 		sidebarWidth:   sw,
+		excludeDirs:    dirs,
 		backend:        cfg.Backend,
 		defaultScope:   cfg.DefaultScope,
 		autoAdvance:    cfg.AutoAdvance,
@@ -103,9 +119,15 @@ func newGeneralPage(theme *Theme, cfg GeneralSettingsChangedMsg) *generalPage {
 
 func (p *generalPage) Title() string { return "General" }
 
-func (p *generalPage) IsEditing() bool { return p.editing }
+func (p *generalPage) IsEditing() bool { return p.editing || p.listActive }
 
 func (p *generalPage) FooterHints() string {
+	if p.listAdding {
+		return "[Enter] add  [Esc] cancel"
+	}
+	if p.listActive {
+		return "[n] add  [d] remove  [Esc] back"
+	}
 	if p.editing {
 		return "[Enter] confirm  [Esc] cancel"
 	}
@@ -115,15 +137,22 @@ func (p *generalPage) FooterHints() string {
 func (p *generalPage) OnEnter() {
 	p.selectedIdx = 0
 	p.editing = false
+	p.listActive = false
+	p.listAdding = false
 }
 
 func (p *generalPage) OnLeave() tea.Cmd {
 	p.editing = false
+	p.listActive = false
+	p.listAdding = false
+	dirs := make([]string, len(p.excludeDirs))
+	copy(dirs, p.excludeDirs)
 	return func() tea.Msg {
 		return GeneralSettingsChangedMsg{
 			Editor:         p.editor,
 			Bell:           p.bell,
 			SidebarWidth:   p.sidebarWidth,
+			ExcludeDirs:    dirs,
 			Backend:        p.backend,
 			DefaultScope:   p.defaultScope,
 			AutoAdvance:    p.autoAdvance,
@@ -135,10 +164,22 @@ func (p *generalPage) OnLeave() tea.Cmd {
 func (p *generalPage) Update(msg tea.KeyMsg) tea.Cmd {
 	key := msg.String()
 
+	// List add-entry mode (typing a new excluded dir)
+	if p.listAdding {
+		return p.handleListAddKey(key, msg)
+	}
+
+	// List navigation mode (browsing excluded dirs)
+	if p.listActive {
+		return p.handleListKey(key)
+	}
+
+	// Text field editing mode
 	if p.editing {
 		return p.handleEditKey(key, msg)
 	}
 
+	// Normal field navigation
 	switch key {
 	case "j", "down":
 		if p.selectedIdx < len(generalFields)-1 {
@@ -225,6 +266,10 @@ func (p *generalPage) activateField() {
 		p.editing = true
 		p.editValue = p.getFieldValue(p.selectedIdx)
 		p.editCur = len(p.editValue)
+	case "list":
+		p.listActive = true
+		p.listCursor = 0
+		p.listAdding = false
 	}
 }
 
@@ -232,7 +277,7 @@ func (p *generalPage) toggleField() {
 	switch p.selectedIdx {
 	case 1: // Bell
 		p.bell = !p.bell
-	case 5: // Auto Advance
+	case 6: // Auto Advance
 		p.autoAdvance = !p.autoAdvance
 	}
 }
@@ -251,11 +296,11 @@ func (p *generalPage) cycleField(dir int) {
 	next := (idx + dir + len(field.Options)) % len(field.Options)
 
 	switch p.selectedIdx {
-	case 3: // Backend
+	case 4: // Backend
 		p.backend = field.Options[next]
-	case 4: // Default Scope
+	case 5: // Default Scope
 		p.defaultScope = field.Options[next]
-	case 6: // Permission Mode
+	case 7: // Permission Mode
 		p.permissionMode = field.Options[next]
 	}
 }
@@ -284,15 +329,17 @@ func (p *generalPage) getFieldValue(idx int) string {
 	case 2:
 		return strconv.Itoa(p.sidebarWidth)
 	case 3:
-		return p.backend
+		return fmt.Sprintf("%d dirs", len(p.excludeDirs))
 	case 4:
-		return p.defaultScope
+		return p.backend
 	case 5:
+		return p.defaultScope
+	case 6:
 		if p.autoAdvance {
 			return "On"
 		}
 		return "Off"
-	case 6:
+	case 7:
 		return p.permissionMode
 	}
 	return ""
@@ -347,6 +394,8 @@ func (p *generalPage) renderFields(optionsWidth, height int) string {
 			}
 			line := "  " + p.theme.Normal.Render(before) + cursor + p.theme.Normal.Render(after)
 			sb.WriteString(line)
+		case field.Kind == "list" && isSelected:
+			p.renderListField(&sb)
 		case isSelected:
 			switch field.Kind {
 			case "cycle", "number":
@@ -372,6 +421,8 @@ func (p *generalPage) renderFields(optionsWidth, height int) string {
 					display = "(default)"
 				}
 				sb.WriteString(p.theme.Normal.Render(fmt.Sprintf("   %s", display)))
+			case "list":
+				sb.WriteString(p.theme.Normal.Render(fmt.Sprintf("   %s", value)))
 			default:
 				sb.WriteString(p.theme.Normal.Render(fmt.Sprintf("   %s", value)))
 			}
@@ -393,6 +444,38 @@ func (p *generalPage) renderFields(optionsWidth, height int) string {
 		BorderRight(true).
 		BorderForeground(p.theme.Accent).
 		Render(sb.String())
+}
+
+func (p *generalPage) renderListField(sb *strings.Builder) {
+	if !p.listActive {
+		// Collapsed: show summary with activation hint
+		sb.WriteString(p.theme.Selected.Render(fmt.Sprintf(" \u25B8 %d dirs", len(p.excludeDirs))))
+		return
+	}
+
+	// Expanded: show each entry
+	for i, dir := range p.excludeDirs {
+		if i == p.listCursor {
+			sb.WriteString(p.theme.Selected.Render(fmt.Sprintf(" \u25B8 %s", dir)))
+		} else {
+			sb.WriteString(p.theme.Normal.Render(fmt.Sprintf("   %s", dir)))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Show "add" input or prompt
+	if p.listAdding {
+		before := p.listEditValue[:p.listEditCur]
+		after := p.listEditValue[p.listEditCur:]
+		cursor := p.theme.Selected.Reverse(true).Render(" ")
+		if p.listEditCur < len(p.listEditValue) {
+			cursor = p.theme.Selected.Reverse(true).Render(string(p.listEditValue[p.listEditCur]))
+			after = after[1:]
+		}
+		sb.WriteString("  + " + p.theme.Normal.Render(before) + cursor + p.theme.Normal.Render(after))
+	} else if len(p.excludeDirs) == 0 {
+		sb.WriteString(p.theme.Dimmed.Render("   (empty)"))
+	}
 }
 
 func (p *generalPage) renderInfo(infoWidth, _ int) string {
@@ -427,6 +510,80 @@ func (p *generalPage) renderInfo(infoWidth, _ int) string {
 		Width(infoWidth).
 		PaddingLeft(1).
 		Render(sb.String())
+}
+
+func (p *generalPage) handleListKey(key string) tea.Cmd {
+	switch key {
+	case "j", "down":
+		if p.listCursor < len(p.excludeDirs)-1 {
+			p.listCursor++
+		}
+	case "k", "up":
+		if p.listCursor > 0 {
+			p.listCursor--
+		}
+	case "n", "enter":
+		p.listAdding = true
+		p.listEditValue = ""
+		p.listEditCur = 0
+	case "d", "backspace":
+		if len(p.excludeDirs) > 0 && p.listCursor < len(p.excludeDirs) {
+			p.excludeDirs = append(p.excludeDirs[:p.listCursor], p.excludeDirs[p.listCursor+1:]...)
+			if p.listCursor >= len(p.excludeDirs) && p.listCursor > 0 {
+				p.listCursor--
+			}
+		}
+	case "esc":
+		p.listActive = false
+	}
+	return nil
+}
+
+func (p *generalPage) handleListAddKey(key string, msg tea.KeyMsg) tea.Cmd {
+	switch key {
+	case "enter":
+		d := strings.TrimSpace(p.listEditValue)
+		if d != "" {
+			p.excludeDirs = append(p.excludeDirs, d)
+			p.listCursor = len(p.excludeDirs) - 1
+		}
+		p.listAdding = false
+	case "esc":
+		p.listAdding = false
+	case "backspace":
+		if p.listEditCur > 0 {
+			p.listEditValue = p.listEditValue[:p.listEditCur-1] + p.listEditValue[p.listEditCur:]
+			p.listEditCur--
+		}
+	case "left":
+		if p.listEditCur > 0 {
+			p.listEditCur--
+		}
+	case "right":
+		if p.listEditCur < len(p.listEditValue) {
+			p.listEditCur++
+		}
+	default:
+		if len(key) == 1 && key[0] >= 32 && key[0] < 127 {
+			p.listEditValue = p.listEditValue[:p.listEditCur] + key + p.listEditValue[p.listEditCur:]
+			p.listEditCur++
+		} else if len(msg.Runes) > 0 {
+			ch := string(msg.Runes)
+			p.listEditValue = p.listEditValue[:p.listEditCur] + ch + p.listEditValue[p.listEditCur:]
+			p.listEditCur += len(ch)
+		}
+	}
+	return nil
+}
+
+// AddExcludeDir adds a directory to the exclude list (used by sidebar hotkey).
+func (p *generalPage) AddExcludeDir(dir string) {
+	for _, d := range p.excludeDirs {
+		if d == dir {
+			return // already excluded
+		}
+	}
+	p.excludeDirs = append(p.excludeDirs, dir)
 }
 
 func (p *generalPage) resolveEditor() string {

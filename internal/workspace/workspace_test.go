@@ -110,7 +110,7 @@ func TestToggleFileStatus(t *testing.T) {
 			}
 
 			// Create workspace
-			ws, err := New(dir)
+			ws, err := New(dir, nil)
 			if err != nil {
 				t.Fatalf("create workspace: %v", err)
 			}
@@ -150,7 +150,7 @@ func TestDeleteFolder(t *testing.T) {
 		os.WriteFile(filepath.Join(sub, "a.md"), []byte("# A\n"), 0o644)
 		os.WriteFile(filepath.Join(sub, "deep", "b.md"), []byte("# B\n"), 0o644)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -174,7 +174,7 @@ func TestDeleteFolder(t *testing.T) {
 
 	t.Run("delete non-existent folder", func(t *testing.T) {
 		dir := t.TempDir()
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -187,7 +187,7 @@ func TestDeleteFolder(t *testing.T) {
 
 	t.Run("delete rejects path outside workspace", func(t *testing.T) {
 		dir := t.TempDir()
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -202,7 +202,7 @@ func TestDeleteFolder(t *testing.T) {
 		dir := t.TempDir()
 		os.WriteFile(filepath.Join(dir, "file.md"), []byte("# File\n"), 0o644)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -220,7 +220,7 @@ func TestMoveFile(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "task.md"), []byte("# Task\n"), 0o644)
 		os.MkdirAll(filepath.Join(dir, "archive"), 0o755)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -248,7 +248,7 @@ func TestMoveFile(t *testing.T) {
 		os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
 		os.WriteFile(filepath.Join(dir, "sub", "task.md"), []byte("# Task\n"), 0o644)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -266,7 +266,7 @@ func TestMoveFile(t *testing.T) {
 		dir := t.TempDir()
 		os.WriteFile(filepath.Join(dir, "task.md"), []byte("# Task\n"), 0o644)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -285,7 +285,7 @@ func TestMoveFile(t *testing.T) {
 		os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
 		os.WriteFile(filepath.Join(dir, "sub", "task.md"), []byte("# Task\n"), 0o644)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -302,7 +302,7 @@ func TestMoveFile(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "task.md"), []byte("# Task 1\n"), 0o644)
 		os.WriteFile(filepath.Join(dir, "sub", "task.md"), []byte("# Task 2\n"), 0o644)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -321,7 +321,7 @@ func TestMoveFolder(t *testing.T) {
 		os.MkdirAll(filepath.Join(dir, "dest"), 0o755)
 		os.WriteFile(filepath.Join(dir, "src", "task.md"), []byte("# Task\n"), 0o644)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -343,7 +343,7 @@ func TestMoveFolder(t *testing.T) {
 		os.MkdirAll(filepath.Join(dir, "parent", "child"), 0o755)
 		os.WriteFile(filepath.Join(dir, "parent", "child", "task.md"), []byte("# Task\n"), 0o644)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -362,7 +362,7 @@ func TestMoveFolder(t *testing.T) {
 		os.MkdirAll(filepath.Join(dir, "src", "sub"), 0o755)
 		os.WriteFile(filepath.Join(dir, "src", "task.md"), []byte("# Task\n"), 0o644)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -378,7 +378,7 @@ func TestMoveFolder(t *testing.T) {
 		os.MkdirAll(filepath.Join(dir, "src"), 0o755)
 		os.WriteFile(filepath.Join(dir, "src", "task.md"), []byte("# Task\n"), 0o644)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -395,7 +395,7 @@ func TestMoveFolder(t *testing.T) {
 		os.MkdirAll(filepath.Join(dir, "dest", "src"), 0o755)
 		os.WriteFile(filepath.Join(dir, "src", "task.md"), []byte("# Task\n"), 0o644)
 
-		ws, err := New(dir)
+		ws, err := New(dir, nil)
 		if err != nil {
 			t.Fatalf("create workspace: %v", err)
 		}
@@ -405,6 +405,67 @@ func TestMoveFolder(t *testing.T) {
 			t.Error("expected error for name conflict")
 		}
 	})
+}
+
+func TestRefreshExcludesDirs(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create files in root, an included subdir, and excluded dirs
+	os.WriteFile(filepath.Join(dir, "root.md"), []byte("# Root\n"), 0o644)
+
+	included := filepath.Join(dir, "docs")
+	os.MkdirAll(included, 0o755)
+	os.WriteFile(filepath.Join(included, "doc.md"), []byte("# Doc\n"), 0o644)
+
+	excluded := filepath.Join(dir, "node_modules")
+	os.MkdirAll(excluded, 0o755)
+	os.WriteFile(filepath.Join(excluded, "pkg.md"), []byte("# Pkg\n"), 0o644)
+
+	hidden := filepath.Join(dir, ".git")
+	os.MkdirAll(hidden, 0o755)
+	os.WriteFile(filepath.Join(hidden, "internal.md"), []byte("# Git\n"), 0o644)
+
+	tests := []struct {
+		name        string
+		excludeDirs []string
+		wantFiles   int
+		wantNames   []string
+	}{
+		{
+			name:        "excludes node_modules and .git",
+			excludeDirs: []string{"node_modules", ".git"},
+			wantFiles:   2,
+			wantNames:   []string{"root.md", "docs/doc.md"},
+		},
+		{
+			name:        "nil exclude list shows all dirs including hidden",
+			excludeDirs: nil,
+			wantFiles:   4, // root.md, docs/doc.md, node_modules/pkg.md, .git/internal.md
+			wantNames:   []string{"root.md", "docs/doc.md", "node_modules/pkg.md", ".git/internal.md"},
+		},
+		{
+			name:        "exclude multiple dirs",
+			excludeDirs: []string{"node_modules", "docs", ".git"},
+			wantFiles:   1,
+			wantNames:   []string{"root.md"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws, err := New(dir, tt.excludeDirs)
+			if err != nil {
+				t.Fatalf("create workspace: %v", err)
+			}
+			if got := len(ws.Files()); got != tt.wantFiles {
+				names := make([]string, len(ws.Files()))
+				for i, f := range ws.Files() {
+					names[i] = f.Name
+				}
+				t.Fatalf("got %d files %v, want %d files %v", got, names, tt.wantFiles, tt.wantNames)
+			}
+		})
+	}
 }
 
 func contains(s, substr string) bool {

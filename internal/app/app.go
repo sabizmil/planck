@@ -129,7 +129,7 @@ func New(cfg *config.Config, configDir, folder string, backend session.Interacti
 	}
 
 	// Create workspace
-	ws, err := workspace.New(folder)
+	ws, err := workspace.New(folder, cfg.Preferences.ExcludeDirs)
 	if err != nil {
 		return nil, fmt.Errorf("create workspace: %w", err)
 	}
@@ -156,6 +156,7 @@ func New(cfg *config.Config, configDir, folder string, backend session.Interacti
 		Editor:         cfg.Preferences.Editor,
 		Bell:           cfg.Notifications.Bell,
 		SidebarWidth:   cfg.Preferences.SidebarWidth,
+		ExcludeDirs:    cfg.Preferences.ExcludeDirs,
 		Backend:        cfg.Session.Backend,
 		DefaultScope:   cfg.Execution.DefaultScope,
 		AutoAdvance:    cfg.Execution.AutoAdvance,
@@ -396,6 +397,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.config.Preferences.SidebarWidth = msg.SidebarWidth
 			a.sidebarWidth = msg.SidebarWidth
 			a.updateSizes()
+		}
+		if msg.ExcludeDirs != nil {
+			a.config.Preferences.ExcludeDirs = msg.ExcludeDirs
+			a.workspace.SetExcludeDirs(msg.ExcludeDirs)
+			a.refreshFiles()
 		}
 		_ = a.config.Save()
 		return a, nil
@@ -1386,6 +1392,25 @@ func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 		case km.Matches(ui.ContextFileList, ui.ActionRefresh, key):
 			a.refreshFiles()
 			a.message = "Files refreshed"
+
+		case km.Matches(ui.ContextFileList, ui.ActionExcludeDir, key):
+			if dirPath := a.fileList.SelectedDirPath(); dirPath != "" {
+				dirName := filepath.Base(dirPath)
+				a.dialog.ShowConfirm(
+					"Exclude Folder?",
+					fmt.Sprintf("Hide '%s' from sidebar?", dirName),
+					func(result ui.DialogResult) {
+						if result.Confirmed {
+							a.config.Preferences.ExcludeDirs = append(a.config.Preferences.ExcludeDirs, dirName)
+							a.workspace.SetExcludeDirs(a.config.Preferences.ExcludeDirs)
+							a.settings.AddExcludeDir(dirName)
+							_ = a.config.Save()
+							a.refreshFiles()
+							a.message = fmt.Sprintf("Excluded: %s", dirName)
+						}
+					},
+				)
+			}
 		}
 	}
 

@@ -23,6 +23,7 @@ type GeneralSettingsChangedMsg struct {
 	AutoAdvance    bool
 	PermissionMode string
 	SidebarWidth   int
+	ExcludeDirs    []string
 }
 
 // AgentsSettingsChangedMsg is emitted when the user changes agent settings.
@@ -95,6 +96,16 @@ func NewSettings(theme *Theme, keymap *Keymap, registry *StyleRegistry, mdCfg Ma
 		},
 	}
 	return s
+}
+
+// AddExcludeDir adds a directory to the excluded dirs list in the General settings page.
+func (s *Settings) AddExcludeDir(dir string) {
+	for _, cat := range s.categories {
+		if gp, ok := cat.Page.(*generalPage); ok {
+			gp.AddExcludeDir(dir)
+			return
+		}
+	}
 }
 
 // Init initializes the settings panel.

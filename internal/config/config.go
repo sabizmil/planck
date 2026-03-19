@@ -33,13 +33,22 @@ type AgentConfig struct {
 	Default            bool     `toml:"default"`
 }
 
+// DefaultExcludeDirs is the default list of directories to exclude from the
+// sidebar file list and file watcher.
+var DefaultExcludeDirs = []string{
+	".git", ".hg", ".svn",
+	"node_modules", "vendor", ".next",
+	"build", "dist", "__pycache__",
+}
+
 // Preferences holds user preferences
 type Preferences struct {
-	Editor       string `toml:"editor"`
-	TmuxPrefix   string `toml:"tmux_prefix"`
-	SpinnerStyle string `toml:"spinner_style"`
-	SidebarWidth int    `toml:"sidebar_width"`
-	ThemePreset  string `toml:"theme_preset"`
+	Editor       string   `toml:"editor"`
+	TmuxPrefix   string   `toml:"tmux_prefix"`
+	SpinnerStyle string   `toml:"spinner_style"`
+	SidebarWidth int      `toml:"sidebar_width"`
+	ThemePreset  string   `toml:"theme_preset"`
+	ExcludeDirs  []string `toml:"exclude_dirs"`
 }
 
 // MarkdownStyle configures the markdown rendering style
@@ -96,6 +105,7 @@ func DefaultConfig() *Config {
 			TmuxPrefix:   "planck",
 			SpinnerStyle: "claude",
 			SidebarWidth: 28,
+			ExcludeDirs:  append([]string{}, DefaultExcludeDirs...),
 		},
 		Notifications: Notifications{
 			Bell: true,
