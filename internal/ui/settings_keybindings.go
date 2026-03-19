@@ -126,8 +126,8 @@ func (p *keybindingsPage) handleCapture(key string, msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	// Don't allow binding tab or shift+tab (used for navigation)
-	if msg.Type == tea.KeyTab || msg.Type == tea.KeyShiftTab {
+	// Don't allow binding tab (used for widget navigation)
+	if msg.Type == tea.KeyTab {
 		return nil
 	}
 

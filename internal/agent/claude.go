@@ -73,16 +73,22 @@ func (c *ClaudeAgent) Stream(ctx context.Context, prompt string) (<-chan StreamE
 
 	stderr, err := c.cmd.StderrPipe()
 	if err != nil {
+		stdout.Close()
 		return nil, fmt.Errorf("create stderr pipe: %w", err)
 	}
 
 	stdin, err := c.cmd.StdinPipe()
 	if err != nil {
+		stdout.Close()
+		stderr.Close()
 		return nil, fmt.Errorf("create stdin pipe: %w", err)
 	}
 	c.stdin = stdin
 
 	if err := c.cmd.Start(); err != nil {
+		stdout.Close()
+		stderr.Close()
+		stdin.Close()
 		return nil, fmt.Errorf("start command: %w", err)
 	}
 

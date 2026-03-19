@@ -187,9 +187,11 @@ func main() {
 	)
 
 	if _, err := p.Run(); err != nil {
+		application.Close()
 		fmt.Fprintf(os.Stderr, "Error running app: %v\n", err)
 		os.Exit(1)
 	}
+	application.Close()
 }
 
 func runUpdate(args []string) {
@@ -370,7 +372,7 @@ Commands:
   version --check    Show version and check for updates
 
 Keybindings (Global):
-  Shift+Tab    Next tab
+  | (pipe)     Next tab
   Alt+1-9      Jump to tab by number (all modes)
   1-9          Jump to tab by number (normal mode)
   a            Create new agent tab

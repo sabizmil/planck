@@ -25,8 +25,7 @@ linters-settings:
     check-type-assertions: true
     check-blank: false
 
-  govet:
-    check-shadowing: false
+  govet: {}
 
   gofmt:
     simplify: true
@@ -45,6 +44,9 @@ linters-settings:
     locale: US
 
 issues:
+  exclude-dirs:
+    - internal/vt  # Third-party fork of charmbracelet/x/vt
+
   exclude-rules:
     # Exclude test files from some checks
     - path: _test\.go

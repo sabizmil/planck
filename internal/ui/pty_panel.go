@@ -79,9 +79,9 @@ func (p *PTYPanel) Update(msg tea.Msg) (*PTYPanel, tea.Cmd) {
 				p.scrollOffset = 0
 			}
 
-			// Shift+Tab and Alt+{1-9} are handled at app level for tab switching;
-			// bare Tab passes through to PTY for autocomplete.
-			if msg.Type == tea.KeyShiftTab {
+			// Next-tab binding (default Alt+Tab) and Alt+{1-9} are handled at
+			// app level for tab switching; bare Tab passes through to PTY.
+			if km.Matches(ContextGlobal, ActionNextTab, key) {
 				return p, nil
 			}
 			if msg.Alt && msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] <= '9' {

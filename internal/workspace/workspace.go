@@ -491,12 +491,24 @@ func (w *Workspace) Watch() (<-chan struct{}, error) {
 		return nil, fmt.Errorf("create watcher: %w", err)
 	}
 
-	// Watch root folder and all non-hidden subdirectories
+	// Directories to skip entirely (heavy or internal — not useful for markdown watching)
+	skipDirs := map[string]bool{
+		".git": true, ".hg": true, ".svn": true,
+		"node_modules": true, "vendor": true, ".next": true,
+		"build": true, "dist": true, "__pycache__": true,
+	}
+
+	// Watch root folder and non-hidden, non-heavy subdirectories
 	err = filepath.WalkDir(w.folder, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
+			name := d.Name()
+			// Skip hidden dirs (except the root itself) and known heavy dirs
+			if path != w.folder && (strings.HasPrefix(name, ".") || skipDirs[name]) {
+				return filepath.SkipDir
+			}
 			_ = watcher.Add(path)
 		}
 		return nil
@@ -518,10 +530,11 @@ func (w *Workspace) Watch() (<-chan struct{}, error) {
 					return
 				}
 
-				// Watch newly created directories
+				// Watch newly created directories (same filter as initial walk)
 				if event.Has(fsnotify.Create) {
 					if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-						if !strings.HasPrefix(filepath.Base(event.Name), ".") {
+						name := filepath.Base(event.Name)
+						if !strings.HasPrefix(name, ".") && !skipDirs[name] {
 							_ = watcher.Add(event.Name)
 						}
 					}

@@ -32,19 +32,19 @@ func TestPTYPanelTabPassthroughInInputMode(t *testing.T) {
 	}
 }
 
-func TestPTYPanelShiftTabBlockedInInputMode(t *testing.T) {
+func TestPTYPanelNextTabBlockedInInputMode(t *testing.T) {
 	theme := DefaultTheme()
 	panel := NewPTYPanel(theme, DefaultKeymap())
 	panel.Show("test-task", "Test", "test-session")
 	panel.SetSize(80, 24)
 	panel.EnterInputMode()
 
-	// Shift+Tab should be blocked (handled at app level for tab switching)
-	shiftTabMsg := tea.KeyMsg{Type: tea.KeyShiftTab}
-	_, cmd := panel.Update(shiftTabMsg)
+	// | (default next_tab binding) should be blocked (handled at app level)
+	pipeMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'|'}}
+	_, cmd := panel.Update(pipeMsg)
 
 	if cmd != nil {
-		t.Error("Shift+Tab in input mode should be blocked (return nil cmd), got a command")
+		t.Error("| in input mode should be blocked (return nil cmd), got a command")
 	}
 }
 

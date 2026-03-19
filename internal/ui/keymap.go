@@ -124,7 +124,7 @@ func DefaultKeymap() *Keymap {
 				Bindings: []Binding{
 					{ActionToggleHelp, []string{"?"}, "Toggle help"},
 					{ActionQuit, []string{"q"}, "Quit"},
-					{ActionNextTab, []string{"shift+tab"}, "Next tab"},
+					{ActionNextTab, []string{"|"}, "Next tab"},
 					{ActionCloseTab, []string{"ctrl+x"}, "Close agent tab"},
 					{ActionSettings, []string{"s"}, "Settings"},
 					{ActionCreateAgent, []string{"a"}, "Create agent tab"},

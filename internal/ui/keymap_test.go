@@ -34,7 +34,7 @@ func TestDefaultKeymap_Matches(t *testing.T) {
 		{ContextGlobal, ActionQuit, "q", true},
 		{ContextGlobal, ActionQuit, "x", false},
 		{ContextGlobal, ActionToggleHelp, "?", true},
-		{ContextGlobal, ActionNextTab, "shift+tab", true},
+		{ContextGlobal, ActionNextTab, "|", true},
 		{ContextGlobal, ActionCloseTab, "ctrl+x", true},
 		{ContextGlobal, ActionSettings, "s", true},
 		{ContextGlobal, ActionCreateAgent, "a", true},

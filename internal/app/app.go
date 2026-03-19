@@ -1267,6 +1267,13 @@ func (a *App) killAllSessions() {
 	}
 }
 
+// Close releases resources held by the app (store, file watcher).
+// Call after tea.Program.Run() returns.
+func (a *App) Close() {
+	a.workspace.StopWatch()
+	a.store.Close()
+}
+
 func (a *App) handlePlanningTabKey(key string, _ tea.KeyMsg) tea.Cmd {
 	// Skip if in edit mode - let editor handle
 	if a.editor.Mode() == ui.EditorModeEdit {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/x/vt"
+	"github.com/sabizmil/planck/internal/vt"
 )
 
 // Note: These tests are excluded from race detection because vt.Emulator

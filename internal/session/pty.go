@@ -10,9 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 	"github.com/google/uuid"
+
+	"github.com/sabizmil/planck/internal/vt"
 )
 
 // PTYSession represents an active PTY session
@@ -223,6 +224,10 @@ func (s *PTYSession) waitLoop() {
 	}
 	s.mu.Unlock()
 	close(s.done)
+
+	// Close PTY master fd so readLoop/responseLoop goroutines unblock and exit.
+	// This is the natural-exit path; Kill() also closes it, and Close is idempotent.
+	s.master.Close()
 
 	// Clean up prompt file
 	if s.promptFile != "" {

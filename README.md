@@ -76,7 +76,7 @@ planck -f /path/to/project
 
 ### Multi-Agent Tabs
 
-Run up to 8 concurrent agent sessions, each in its own tab with an independent PTY. Tabs display animated activity spinners while agents are running, and auto-generate titles via OSC escape sequences. Switch tabs with `Shift+Tab`, `Alt+1-9`, `1-9`, or by clicking the tab bar.
+Run up to 8 concurrent agent sessions, each in its own tab with an independent PTY. Tabs display animated activity spinners while agents are running, and auto-generate titles via OSC escape sequences. Switch tabs with `|` (pipe), `Alt+1-9`, `1-9`, or by clicking the tab bar.
 
 ### Built-in Editor
 
@@ -131,7 +131,7 @@ Terminal bell notifications on session events (planning complete, task done, err
 |-----|--------|
 | `q` / `Ctrl+C` (×2) | Quit (double-tap safety) |
 | `?` | Toggle help overlay |
-| `Shift+Tab` | Next tab |
+| `\|` (pipe) | Next tab |
 | `1`–`9` | Jump to tab by number (normal mode) |
 | `Alt+1`–`Alt+9` | Jump to tab by number (works in all modes) |
 | `a` | Create new agent tab |
@@ -170,7 +170,7 @@ Mouse: click to position cursor, drag to select text.
 |-----|--------|
 | `Ctrl+\` | Exit to normal mode |
 | `Tab` | Sent to agent (autocomplete) |
-| `Shift+Tab` | Next tab |
+| `\|` (pipe) | Next tab |
 | `Alt+1`–`Alt+9` | Jump to tab |
 | `Ctrl+X` | Close tab |
 
