@@ -104,6 +104,14 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	// UI state key-value table for persisting ephemeral UI state (folder state, etc.)
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS ui_state (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("create ui_state table: %w", err)
+	}
+
 	// Add new columns for session recovery (idempotent via IF NOT EXISTS check)
 	newColumns := []struct {
 		name string
@@ -333,4 +341,25 @@ func DecodeArgs(s string) []string {
 		return nil
 	}
 	return args
+}
+
+// UI State operations
+
+// GetUIState retrieves a UI state value by key. Returns "" if not found.
+func (s *Store) GetUIState(key string) string {
+	var value string
+	err := s.db.QueryRow("SELECT value FROM ui_state WHERE key = ?", key).Scan(&value)
+	if err != nil {
+		return ""
+	}
+	return value
+}
+
+// SetUIState saves a UI state value by key.
+func (s *Store) SetUIState(key, value string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO ui_state (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+	`, key, value)
+	return err
 }

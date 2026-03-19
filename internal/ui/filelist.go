@@ -81,6 +81,19 @@ func NewFileList(theme *Theme) *FileList {
 	}
 }
 
+// GetDirState returns the current directory expand/collapse state map.
+func (f *FileList) GetDirState() map[string]bool {
+	return f.dirState
+}
+
+// SetDirState replaces the directory expand/collapse state map.
+// Call before SetFiles() to restore persisted state.
+func (f *FileList) SetDirState(state map[string]bool) {
+	if state != nil {
+		f.dirState = state
+	}
+}
+
 // Init initializes the file list
 func (f *FileList) Init() tea.Cmd {
 	return nil

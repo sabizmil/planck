@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -214,6 +215,14 @@ func New(cfg *config.Config, configDir, folder string, backend session.Interacti
 
 // Init initializes the application
 func (a *App) Init() tea.Cmd {
+	// Restore sidebar folder expand/collapse state from previous session
+	if raw := a.store.GetUIState("dir_state"); raw != "" {
+		var dirState map[string]bool
+		if json.Unmarshal([]byte(raw), &dirState) == nil {
+			a.fileList.SetDirState(dirState)
+		}
+	}
+
 	// Load files into list
 	a.refreshFiles()
 
@@ -1276,6 +1285,13 @@ func (a *App) killAllSessions() {
 // Close releases resources held by the app (store, file watcher).
 // Call after tea.Program.Run() returns.
 func (a *App) Close() {
+	// Persist sidebar folder expand/collapse state
+	if dirState := a.fileList.GetDirState(); len(dirState) > 0 {
+		if data, err := json.Marshal(dirState); err == nil {
+			_ = a.store.SetUIState("dir_state", string(data))
+		}
+	}
+
 	a.workspace.StopWatch()
 	a.store.Close()
 }

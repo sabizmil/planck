@@ -479,3 +479,35 @@ func createOldSchemaDatabaseWithData(path string) error {
 
 	return nil
 }
+
+func TestUIState(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	// Get non-existent key returns empty string
+	if got := store.GetUIState("missing"); got != "" {
+		t.Errorf("GetUIState(missing) = %q, want empty", got)
+	}
+
+	// Set and get
+	if err := store.SetUIState("dir_state", `{"docs":true,"plans":false}`); err != nil {
+		t.Fatalf("SetUIState() error = %v", err)
+	}
+	if got := store.GetUIState("dir_state"); got != `{"docs":true,"plans":false}` {
+		t.Errorf("GetUIState() = %q, want %q", got, `{"docs":true,"plans":false}`)
+	}
+
+	// Upsert overwrites
+	if err := store.SetUIState("dir_state", `{"docs":false}`); err != nil {
+		t.Fatalf("SetUIState() upsert error = %v", err)
+	}
+	if got := store.GetUIState("dir_state"); got != `{"docs":false}` {
+		t.Errorf("GetUIState() after upsert = %q, want %q", got, `{"docs":false}`)
+	}
+}
