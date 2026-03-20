@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -16,6 +17,29 @@ const (
 	EditorModeView EditorMode = iota
 	EditorModeEdit
 )
+
+// editType classifies an edit operation for undo grouping.
+type editType int
+
+const (
+	editNone    editType = iota
+	editInsert           // single character or rune insertion
+	editDelete           // backspace or delete
+	editNewline          // enter key
+	editPaste            // multi-character insert (tab, paste)
+)
+
+// editorSnapshot captures restorable editor state for undo/redo.
+type editorSnapshot struct {
+	lines     []string
+	cursorRow int
+	cursorCol int
+}
+
+const maxUndoDepth = 100
+
+// undoGroupTimeout is the max time between keystrokes to keep grouping.
+const undoGroupTimeout = 500 * time.Millisecond
 
 // Editor displays and edits markdown content
 type Editor struct {
@@ -61,6 +85,14 @@ type Editor struct {
 
 	// Keymap reference
 	keymap *Keymap
+
+	// Undo/redo state
+	undoStack    []editorSnapshot
+	redoStack    []editorSnapshot
+	lastEditType editType
+	lastEditTime time.Time
+	lastEditRow  int
+	lastEditCol  int
 }
 
 // NewEditor creates a new editor
@@ -177,6 +209,14 @@ func (e *Editor) updateEditMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 		}
 		return e, nil
 
+	case tea.KeyCtrlZ:
+		e.Undo()
+		return e, nil
+
+	case tea.KeyCtrlY:
+		e.Redo()
+		return e, nil
+
 	case tea.KeyCtrlS:
 		// Save
 		e.rebuildContent()
@@ -281,6 +321,7 @@ func (e *Editor) updateEditMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 		e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
 
 	case tea.KeyEnter:
+		e.pushUndo(editNewline)
 		if e.hasSelection {
 			e.deleteSelection()
 		}
@@ -288,6 +329,7 @@ func (e *Editor) updateEditMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 		e.modified = true
 
 	case tea.KeyBackspace:
+		e.pushUndo(editDelete)
 		if e.hasSelection {
 			e.deleteSelection()
 			e.modified = true
@@ -297,6 +339,7 @@ func (e *Editor) updateEditMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 		}
 
 	case tea.KeyDelete:
+		e.pushUndo(editDelete)
 		if e.hasSelection {
 			e.deleteSelection()
 			e.modified = true
@@ -306,6 +349,7 @@ func (e *Editor) updateEditMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 		}
 
 	case tea.KeyTab:
+		e.pushUndo(editPaste)
 		if e.hasSelection {
 			e.deleteSelection()
 		}
@@ -313,6 +357,35 @@ func (e *Editor) updateEditMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 		e.modified = true
 
 	case tea.KeyRunes:
+		// Alt+rune: handle as command, not text insertion.
+		// macOS terminals send Option+Left/Right as ESC b / ESC f,
+		// which Bubble Tea delivers as KeyRunes with Alt=true.
+		if msg.Alt && len(msg.Runes) == 1 {
+			switch msg.Runes[0] {
+			case 'b': // Alt+b: word left (readline/macOS Option+Left)
+				e.clearSelection()
+				e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
+			case 'f': // Alt+f: word right (readline/macOS Option+Right)
+				e.clearSelection()
+				e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
+			case 'B': // Alt+Shift+b: select to word left
+				fromRow, fromCol := e.cursorRow, e.cursorCol
+				e.cursorRow, e.cursorCol = e.wordBoundaryLeft(e.cursorRow, e.cursorCol)
+				e.extendSelection(fromRow, fromCol)
+			case 'F': // Alt+Shift+f: select to word right
+				fromRow, fromCol := e.cursorRow, e.cursorCol
+				e.cursorRow, e.cursorCol = e.wordBoundaryRight(e.cursorRow, e.cursorCol)
+				e.extendSelection(fromRow, fromCol)
+			}
+			// All other Alt+rune combos: silently ignore
+			return e, nil
+		}
+
+		if len(msg.Runes) > 1 {
+			e.pushUndo(editPaste)
+		} else {
+			e.pushUndo(editInsert)
+		}
 		if e.hasSelection {
 			e.deleteSelection()
 		}
@@ -320,6 +393,10 @@ func (e *Editor) updateEditMode(msg tea.KeyMsg) (*Editor, tea.Cmd) {
 		e.modified = true
 
 	case tea.KeySpace:
+		if msg.Alt {
+			return e, nil // Alt+Space: no-op
+		}
+		e.pushUndo(editInsert)
 		if e.hasSelection {
 			e.deleteSelection()
 		}
@@ -1002,6 +1079,7 @@ func (e *Editor) SetContent(fileName, content string) {
 	e.cursorCol = 0
 	e.modified = false
 	e.clearSelection()
+	e.resetUndoHistory()
 	e.parseLines()
 	e.renderContent()
 }
@@ -1305,6 +1383,117 @@ func (e *Editor) handleMouse(msg tea.MouseMsg) (*Editor, tea.Cmd) {
 	}
 
 	return e, nil
+}
+
+// --- Undo/Redo ---
+
+// captureSnapshot returns the current editor state as a snapshot.
+func (e *Editor) captureSnapshot() editorSnapshot {
+	linesCopy := make([]string, len(e.lines))
+	copy(linesCopy, e.lines)
+	return editorSnapshot{
+		lines:     linesCopy,
+		cursorRow: e.cursorRow,
+		cursorCol: e.cursorCol,
+	}
+}
+
+// restoreSnapshot restores the editor state from a snapshot.
+func (e *Editor) restoreSnapshot(s editorSnapshot) {
+	e.lines = make([]string, len(s.lines))
+	copy(e.lines, s.lines)
+	e.cursorRow = s.cursorRow
+	e.cursorCol = s.cursorCol
+	e.clearSelection()
+	e.rebuildContent()
+	e.modified = true
+	e.ensureCursorVisible()
+}
+
+// pushUndo records the current state before a mutation.
+// It uses grouping heuristics to coalesce related edits (e.g., consecutive
+// character typing) into a single undo entry.
+func (e *Editor) pushUndo(et editType) {
+	now := time.Now()
+
+	shouldBreak := et != e.lastEditType ||
+		et == editNewline ||
+		et == editPaste ||
+		now.Sub(e.lastEditTime) > undoGroupTimeout ||
+		!e.isCursorAdjacent()
+
+	if shouldBreak || len(e.undoStack) == 0 {
+		snap := e.captureSnapshot()
+		if len(e.undoStack) >= maxUndoDepth {
+			// Drop oldest entry
+			e.undoStack = e.undoStack[1:]
+		}
+		e.undoStack = append(e.undoStack, snap)
+	}
+
+	// Any new edit clears the redo stack
+	e.redoStack = e.redoStack[:0]
+
+	e.lastEditType = et
+	e.lastEditTime = now
+	e.lastEditRow = e.cursorRow
+	e.lastEditCol = e.cursorCol
+}
+
+// isCursorAdjacent returns true if the cursor is within 1 position of the
+// last recorded edit position (same row, col differs by at most 1).
+func (e *Editor) isCursorAdjacent() bool {
+	if e.cursorRow != e.lastEditRow {
+		return false
+	}
+	diff := e.cursorCol - e.lastEditCol
+	return diff >= -1 && diff <= 1
+}
+
+// Undo reverts to the most recent snapshot on the undo stack.
+func (e *Editor) Undo() {
+	if len(e.undoStack) == 0 {
+		return
+	}
+
+	// Push current state onto redo stack
+	e.redoStack = append(e.redoStack, e.captureSnapshot())
+
+	// Pop and restore from undo stack
+	snap := e.undoStack[len(e.undoStack)-1]
+	e.undoStack = e.undoStack[:len(e.undoStack)-1]
+	e.restoreSnapshot(snap)
+
+	// Reset grouping so next edit starts fresh
+	e.lastEditType = editNone
+}
+
+// Redo re-applies the most recently undone change.
+func (e *Editor) Redo() {
+	if len(e.redoStack) == 0 {
+		return
+	}
+
+	// Push current state onto undo stack
+	e.undoStack = append(e.undoStack, e.captureSnapshot())
+
+	// Pop and restore from redo stack
+	snap := e.redoStack[len(e.redoStack)-1]
+	e.redoStack = e.redoStack[:len(e.redoStack)-1]
+	e.restoreSnapshot(snap)
+
+	// Reset grouping so next edit starts fresh
+	e.lastEditType = editNone
+}
+
+// resetUndoHistory clears both undo and redo stacks.
+func (e *Editor) resetUndoHistory() {
+	e.undoStack = nil
+	e.redoStack = nil
+	e.lastEditType = editNone
+	e.lastEditTime = time.Time{}
+	e.lastEditRow = 0
+	e.lastEditCol = 0
 }
 
 // handleMousePress handles left-click: places cursor or extends selection with Shift+Click.

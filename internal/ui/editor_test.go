@@ -3,6 +3,9 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestEditor_RenderViewMode_SmallWidth(t *testing.T) {
@@ -1043,5 +1046,475 @@ func TestEditor_MoveCursorRight_AtEnd(t *testing.T) {
 
 	if e.cursorRow != 0 || e.cursorCol != 5 {
 		t.Errorf("expected (0,5), got (%d,%d)", e.cursorRow, e.cursorCol)
+	}
+}
+
+// --- Undo/Redo Tests ---
+
+func TestEditor_Undo_BasicInsert(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorCol = 5
+
+	e.pushUndo(editInsert)
+	e.insertText("!")
+	e.modified = true
+
+	if strings.Join(e.lines, "\n") != "hello!" {
+		t.Fatalf("expected 'hello!', got %q", strings.Join(e.lines, "\n"))
+	}
+
+	e.Undo()
+
+	got := strings.Join(e.lines, "\n")
+	if got != "hello" {
+		t.Errorf("after undo: expected 'hello', got %q", got)
+	}
+	if e.cursorCol != 5 {
+		t.Errorf("after undo: expected cursorCol=5, got %d", e.cursorCol)
+	}
+}
+
+func TestEditor_Redo_AfterUndo(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorCol = 5
+
+	e.pushUndo(editInsert)
+	e.insertText("!")
+	e.modified = true
+
+	e.Undo()
+	e.Redo()
+
+	got := strings.Join(e.lines, "\n")
+	if got != "hello!" {
+		t.Errorf("after redo: expected 'hello!', got %q", got)
+	}
+	if e.cursorCol != 6 {
+		t.Errorf("after redo: expected cursorCol=6, got %d", e.cursorCol)
+	}
+}
+
+func TestEditor_Redo_ClearedOnNewEdit(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorCol = 5
+
+	e.pushUndo(editInsert)
+	e.insertText("!")
+	e.modified = true
+
+	e.Undo()
+
+	// New edit should clear redo stack
+	e.cursorCol = 5
+	e.pushUndo(editInsert)
+	e.insertText("?")
+
+	if len(e.redoStack) != 0 {
+		t.Errorf("expected redo stack to be empty after new edit, got len=%d", len(e.redoStack))
+	}
+
+	// Redo should be a no-op now
+	before := strings.Join(e.lines, "\n")
+	e.Redo()
+	after := strings.Join(e.lines, "\n")
+	if before != after {
+		t.Errorf("redo should be no-op, but content changed from %q to %q", before, after)
+	}
+}
+
+func TestEditor_Undo_EmptyStack(t *testing.T) {
+	e := newTestEditor("hello")
+
+	// Should be a no-op, not panic
+	e.Undo()
+
+	got := strings.Join(e.lines, "\n")
+	if got != "hello" {
+		t.Errorf("undo on empty stack should be no-op, got %q", got)
+	}
+}
+
+func TestEditor_Redo_EmptyStack(t *testing.T) {
+	e := newTestEditor("hello")
+
+	// Should be a no-op, not panic
+	e.Redo()
+
+	got := strings.Join(e.lines, "\n")
+	if got != "hello" {
+		t.Errorf("redo on empty stack should be no-op, got %q", got)
+	}
+}
+
+func TestEditor_Undo_MultipleEdits(t *testing.T) {
+	e := newTestEditor("")
+	e.cursorCol = 0
+
+	// Type three separate words with group breaks between them
+	e.pushUndo(editInsert)
+	e.insertText("a")
+	e.lastEditType = editNone // force group break
+
+	e.pushUndo(editInsert)
+	e.insertText("b")
+	e.lastEditType = editNone // force group break
+
+	e.pushUndo(editInsert)
+	e.insertText("c")
+
+	if strings.Join(e.lines, "\n") != "abc" {
+		t.Fatalf("expected 'abc', got %q", strings.Join(e.lines, "\n"))
+	}
+
+	e.Undo() // undo "c"
+	got := strings.Join(e.lines, "\n")
+	if got != "ab" {
+		t.Errorf("after first undo: expected 'ab', got %q", got)
+	}
+
+	e.Undo() // undo "b"
+	got = strings.Join(e.lines, "\n")
+	if got != "a" {
+		t.Errorf("after second undo: expected 'a', got %q", got)
+	}
+
+	e.Undo() // undo "a"
+	got = strings.Join(e.lines, "\n")
+	if got != "" {
+		t.Errorf("after third undo: expected '', got %q", got)
+	}
+}
+
+func TestEditor_UndoGrouping_ConsecutiveInserts(t *testing.T) {
+	e := newTestEditor("")
+	e.cursorCol = 0
+
+	// Rapidly type characters — should group into one undo entry
+	for _, ch := range "hello" {
+		e.pushUndo(editInsert)
+		e.insertText(string(ch))
+		// lastEditTime is set by pushUndo, which uses time.Now()
+		// Consecutive calls are well within the 500ms timeout
+	}
+
+	if strings.Join(e.lines, "\n") != "hello" {
+		t.Fatalf("expected 'hello', got %q", strings.Join(e.lines, "\n"))
+	}
+
+	// All characters should undo in one step
+	e.Undo()
+	got := strings.Join(e.lines, "\n")
+	if got != "" {
+		t.Errorf("grouped undo: expected '', got %q", got)
+	}
+}
+
+func TestEditor_UndoGrouping_BreaksOnTypeChange(t *testing.T) {
+	e := newTestEditor("helo")
+	e.cursorCol = 4
+
+	// Insert a character
+	e.pushUndo(editInsert)
+	e.insertText("o")
+
+	// Then delete (type change should break the group)
+	e.pushUndo(editDelete)
+	e.cursorCol = 4
+	e.deleteBackward()
+
+	// Undo the delete — should restore "heloo"
+	e.Undo()
+	got := strings.Join(e.lines, "\n")
+	if got != "heloo" {
+		t.Errorf("after undo delete: expected 'heloo', got %q", got)
+	}
+
+	// Undo the insert — should restore "helo"
+	e.Undo()
+	got = strings.Join(e.lines, "\n")
+	if got != "helo" {
+		t.Errorf("after undo insert: expected 'helo', got %q", got)
+	}
+}
+
+func TestEditor_UndoGrouping_BreaksOnTimeout(t *testing.T) {
+	e := newTestEditor("")
+	e.cursorCol = 0
+
+	// Type "a"
+	e.pushUndo(editInsert)
+	e.insertText("a")
+
+	// Simulate time passing beyond the grouping timeout
+	e.lastEditTime = time.Now().Add(-undoGroupTimeout - time.Millisecond)
+
+	// Type "b" — should be a new group
+	e.pushUndo(editInsert)
+	e.insertText("b")
+
+	if strings.Join(e.lines, "\n") != "ab" {
+		t.Fatalf("expected 'ab', got %q", strings.Join(e.lines, "\n"))
+	}
+
+	// Undo should only remove "b"
+	e.Undo()
+	got := strings.Join(e.lines, "\n")
+	if got != "a" {
+		t.Errorf("after undo: expected 'a', got %q", got)
+	}
+}
+
+func TestEditor_UndoGrouping_PasteAlwaysNewGroup(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorCol = 5
+
+	e.pushUndo(editInsert)
+	e.insertText("!")
+
+	// Paste (editPaste) should always create a new group
+	e.pushUndo(editPaste)
+	e.insertText("    ")
+
+	e.Undo() // undo paste
+	got := strings.Join(e.lines, "\n")
+	if got != "hello!" {
+		t.Errorf("after undo paste: expected 'hello!', got %q", got)
+	}
+}
+
+func TestEditor_Undo_NewlineInsert(t *testing.T) {
+	e := newTestEditor("hello world")
+	e.cursorCol = 5
+
+	e.pushUndo(editNewline)
+	e.insertNewline()
+	e.modified = true
+
+	if len(e.lines) != 2 {
+		t.Fatalf("expected 2 lines after newline, got %d", len(e.lines))
+	}
+
+	e.Undo()
+	got := strings.Join(e.lines, "\n")
+	if got != "hello world" {
+		t.Errorf("after undo newline: expected 'hello world', got %q", got)
+	}
+}
+
+func TestEditor_Undo_StackCap(t *testing.T) {
+	e := newTestEditor("")
+	e.cursorCol = 0
+
+	// Push more than maxUndoDepth entries
+	for i := 0; i < maxUndoDepth+20; i++ {
+		e.lastEditType = editNone // force new group each time
+		e.pushUndo(editInsert)
+		e.insertText("x")
+	}
+
+	if len(e.undoStack) > maxUndoDepth {
+		t.Errorf("undo stack exceeded max depth: got %d, max %d", len(e.undoStack), maxUndoDepth)
+	}
+}
+
+func TestEditor_Undo_ResetOnSetContent(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorCol = 5
+
+	e.pushUndo(editInsert)
+	e.insertText("!")
+
+	if len(e.undoStack) == 0 {
+		t.Fatal("expected non-empty undo stack")
+	}
+
+	// Loading new content should clear undo/redo
+	e.SetContent("other.md", "new content")
+
+	if len(e.undoStack) != 0 {
+		t.Errorf("expected empty undo stack after SetContent, got len=%d", len(e.undoStack))
+	}
+	if len(e.redoStack) != 0 {
+		t.Errorf("expected empty redo stack after SetContent, got len=%d", len(e.redoStack))
+	}
+}
+
+func TestEditor_Undo_DeleteBackward(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorCol = 5
+
+	e.pushUndo(editDelete)
+	e.deleteBackward()
+	e.modified = true
+
+	got := strings.Join(e.lines, "\n")
+	if got != "hell" {
+		t.Fatalf("after delete: expected 'hell', got %q", got)
+	}
+
+	e.Undo()
+	got = strings.Join(e.lines, "\n")
+	if got != "hello" {
+		t.Errorf("after undo: expected 'hello', got %q", got)
+	}
+}
+
+func TestEditor_Undo_DeleteSelection(t *testing.T) {
+	e := newTestEditor("hello world")
+	// Select "world"
+	e.hasSelection = true
+	e.selAnchorRow = 0
+	e.selAnchorCol = 6
+	e.selEndRow = 0
+	e.selEndCol = 11
+	e.cursorRow = 0
+	e.cursorCol = 11
+
+	e.pushUndo(editDelete)
+	e.deleteSelection()
+	e.modified = true
+
+	got := strings.Join(e.lines, "\n")
+	if got != "hello " {
+		t.Fatalf("after delete selection: expected 'hello ', got %q", got)
+	}
+
+	e.Undo()
+	got = strings.Join(e.lines, "\n")
+	if got != "hello world" {
+		t.Errorf("after undo: expected 'hello world', got %q", got)
+	}
+}
+
+func TestEditor_UndoRedo_RoundTrip(t *testing.T) {
+	e := newTestEditor("start")
+	e.cursorCol = 5
+
+	// Make several edits with group breaks
+	edits := []string{"!", "?", "."}
+	for _, ch := range edits {
+		e.lastEditType = editNone
+		e.pushUndo(editInsert)
+		e.insertText(ch)
+	}
+
+	// Undo all
+	for range edits {
+		e.Undo()
+	}
+	got := strings.Join(e.lines, "\n")
+	if got != "start" {
+		t.Errorf("after undo all: expected 'start', got %q", got)
+	}
+
+	// Redo all
+	for range edits {
+		e.Redo()
+	}
+	got = strings.Join(e.lines, "\n")
+	if got != "start!?." {
+		t.Errorf("after redo all: expected 'start!?.', got %q", got)
+	}
+}
+
+// --- Alt+Rune Tests (Option+Arrow on macOS) ---
+
+func TestEditor_AltB_WordJumpLeft(t *testing.T) {
+	e := newTestEditor("hello world")
+	e.cursorCol = 11 // end of "world"
+
+	// Simulate Alt+b (macOS Option+Left via ESC b)
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}, Alt: true}
+	e.updateEditMode(msg)
+
+	if e.cursorCol != 6 {
+		t.Errorf("Alt+b: expected cursorCol=6, got %d", e.cursorCol)
+	}
+	// Should NOT have inserted "b"
+	got := strings.Join(e.lines, "\n")
+	if got != "hello world" {
+		t.Errorf("Alt+b should not insert text, got %q", got)
+	}
+}
+
+func TestEditor_AltF_WordJumpRight(t *testing.T) {
+	e := newTestEditor("hello world")
+	e.cursorCol = 0
+
+	// Simulate Alt+f (macOS Option+Right via ESC f)
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}, Alt: true}
+	e.updateEditMode(msg)
+
+	if e.cursorCol != 6 {
+		t.Errorf("Alt+f: expected cursorCol=6, got %d", e.cursorCol)
+	}
+	got := strings.Join(e.lines, "\n")
+	if got != "hello world" {
+		t.Errorf("Alt+f should not insert text, got %q", got)
+	}
+}
+
+func TestEditor_AltShiftB_WordSelectLeft(t *testing.T) {
+	e := newTestEditor("hello world")
+	e.cursorCol = 11
+
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}, Alt: true}
+	e.updateEditMode(msg)
+
+	if e.cursorCol != 6 {
+		t.Errorf("Alt+Shift+b: expected cursorCol=6, got %d", e.cursorCol)
+	}
+	if !e.hasSelection {
+		t.Error("Alt+Shift+b should create a selection")
+	}
+	got := strings.Join(e.lines, "\n")
+	if got != "hello world" {
+		t.Errorf("Alt+Shift+b should not insert text, got %q", got)
+	}
+}
+
+func TestEditor_AltShiftF_WordSelectRight(t *testing.T) {
+	e := newTestEditor("hello world")
+	e.cursorCol = 0
+
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}, Alt: true}
+	e.updateEditMode(msg)
+
+	if e.cursorCol != 6 {
+		t.Errorf("Alt+Shift+f: expected cursorCol=6, got %d", e.cursorCol)
+	}
+	if !e.hasSelection {
+		t.Error("Alt+Shift+f should create a selection")
+	}
+	got := strings.Join(e.lines, "\n")
+	if got != "hello world" {
+		t.Errorf("Alt+Shift+f should not insert text, got %q", got)
+	}
+}
+
+func TestEditor_AltOtherRune_NoInsert(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorCol = 5
+
+	// Alt+x should NOT insert "x"
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}, Alt: true}
+	e.updateEditMode(msg)
+
+	got := strings.Join(e.lines, "\n")
+	if got != "hello" {
+		t.Errorf("Alt+x should not insert text, got %q", got)
+	}
+}
+
+func TestEditor_AltSpace_NoInsert(t *testing.T) {
+	e := newTestEditor("hello")
+	e.cursorCol = 5
+
+	msg := tea.KeyMsg{Type: tea.KeySpace, Alt: true}
+	e.updateEditMode(msg)
+
+	got := strings.Join(e.lines, "\n")
+	if got != "hello" {
+		t.Errorf("Alt+Space should not insert text, got %q", got)
 	}
 }

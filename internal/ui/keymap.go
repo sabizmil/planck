@@ -13,6 +13,7 @@ const (
 	ContextGlobal      Context = "global"
 	ContextFileList    Context = "file_list"
 	ContextEditor      Context = "editor"
+	ContextEditorEdit  Context = "editor_edit"
 	ContextAgentNormal Context = "agent_normal"
 	ContextAgentInput  Context = "agent_input"
 )
@@ -23,6 +24,7 @@ func AllContexts() []Context {
 		ContextGlobal,
 		ContextFileList,
 		ContextEditor,
+		ContextEditorEdit,
 		ContextAgentNormal,
 		ContextAgentInput,
 	}
@@ -68,6 +70,13 @@ const (
 	ActionEditorTop      Action = "editor_top"
 	ActionEditorBottom   Action = "editor_bottom"
 	ActionEditorEdit     Action = "editor_edit"
+)
+
+// --- Editor edit mode actions ---
+
+const (
+	ActionEditorUndo Action = "editor_undo"
+	ActionEditorRedo Action = "editor_redo"
 )
 
 // --- Agent normal mode actions ---
@@ -161,6 +170,14 @@ func DefaultKeymap() *Keymap {
 					{ActionEditorPageUp, []string{"pgup", "ctrl+u"}, "Page up"},
 					{ActionEditorTop, []string{"home", "g"}, "Go to top"},
 					{ActionEditorBottom, []string{"end", "G"}, "Go to bottom"},
+				},
+			},
+			{
+				Context: ContextEditorEdit,
+				Label:   "Editor (Edit)",
+				Bindings: []Binding{
+					{ActionEditorUndo, []string{"ctrl+z"}, "Undo"},
+					{ActionEditorRedo, []string{"ctrl+y"}, "Redo"},
 				},
 			},
 			{
