@@ -144,7 +144,7 @@ func (a *App) recoverSessions() tea.Cmd {
 		}
 
 		a.agentTabs = append(a.agentTabs, tab)
-		cmds = append(cmds, a.pollAgentTab(tab))
+		cmds = append(cmds, a.pollAgentTab(tab, a.pollIntervalForTab(tab)))
 	}
 
 	if len(a.agentTabs) > 0 {

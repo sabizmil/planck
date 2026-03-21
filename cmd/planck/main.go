@@ -13,6 +13,7 @@ import (
 
 	"github.com/sabizmil/planck/internal/app"
 	"github.com/sabizmil/planck/internal/config"
+	"github.com/sabizmil/planck/internal/perf"
 	"github.com/sabizmil/planck/internal/session"
 	"github.com/sabizmil/planck/internal/tmux"
 	"github.com/sabizmil/planck/internal/updater"
@@ -180,18 +181,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize perf logging. Closed explicitly below (not deferred)
+	// because os.Exit bypasses defers.
+	perf.Init(version == "dev" || os.Getenv("PLANCK_PERF") == "1")
+
 	p := tea.NewProgram(
 		application,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
 
-	if _, err := p.Run(); err != nil {
-		application.Close()
-		fmt.Fprintf(os.Stderr, "Error running app: %v\n", err)
+	_, runErr := p.Run()
+	application.Close()
+	perf.Close()
+	if runErr != nil {
+		fmt.Fprintf(os.Stderr, "Error running app: %v\n", runErr)
 		os.Exit(1)
 	}
-	application.Close()
 }
 
 func runUpdate(args []string) {

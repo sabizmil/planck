@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -419,19 +420,40 @@ func (e *Editor) rebuildContent() {
 	e.renderContent()
 }
 
+// runeLen returns the number of runes in a string.
+func runeLen(s string) int {
+	return utf8.RuneCountInString(s)
+}
+
+// runeToByteOffset converts a rune index to a byte offset in a string.
+// If runeIdx exceeds the rune count, returns len(s).
+func runeToByteOffset(s string, runeIdx int) int {
+	byteOff := 0
+	for i := 0; i < runeIdx; i++ {
+		if byteOff >= len(s) {
+			return len(s)
+		}
+		_, size := utf8.DecodeRuneInString(s[byteOff:])
+		byteOff += size
+	}
+	return byteOff
+}
+
 func (e *Editor) insertText(text string) {
 	if e.cursorRow >= len(e.lines) {
 		e.lines = append(e.lines, "")
 	}
 
 	line := e.lines[e.cursorRow]
-	if e.cursorCol > len(line) {
-		e.cursorCol = len(line)
+	lineRuneLen := runeLen(line)
+	if e.cursorCol > lineRuneLen {
+		e.cursorCol = lineRuneLen
 	}
 
-	newLine := line[:e.cursorCol] + text + line[e.cursorCol:]
+	byteOff := runeToByteOffset(line, e.cursorCol)
+	newLine := line[:byteOff] + text + line[byteOff:]
 	e.lines[e.cursorRow] = newLine
-	e.cursorCol += len(text)
+	e.cursorCol += runeLen(text)
 }
 
 func (e *Editor) insertNewline() {
@@ -443,13 +465,15 @@ func (e *Editor) insertNewline() {
 	}
 
 	line := e.lines[e.cursorRow]
-	if e.cursorCol > len(line) {
-		e.cursorCol = len(line)
+	lineRuneLen := runeLen(line)
+	if e.cursorCol > lineRuneLen {
+		e.cursorCol = lineRuneLen
 	}
 
-	// Split line at cursor
-	before := line[:e.cursorCol]
-	after := line[e.cursorCol:]
+	// Split line at cursor (rune boundary)
+	byteOff := runeToByteOffset(line, e.cursorCol)
+	before := line[:byteOff]
+	after := line[byteOff:]
 
 	// Insert new line
 	newLines := make([]string, len(e.lines)+1)
@@ -466,12 +490,12 @@ func (e *Editor) insertNewline() {
 
 func (e *Editor) deleteBackward() {
 	if e.cursorCol > 0 {
-		// Delete character before cursor
+		// Delete rune before cursor
 		line := e.lines[e.cursorRow]
-		if e.cursorCol <= len(line) {
-			e.lines[e.cursorRow] = line[:e.cursorCol-1] + line[e.cursorCol:]
-			e.cursorCol--
-		}
+		byteOff := runeToByteOffset(line, e.cursorCol)
+		_, runeSize := utf8.DecodeLastRuneInString(line[:byteOff])
+		e.lines[e.cursorRow] = line[:byteOff-runeSize] + line[byteOff:]
+		e.cursorCol--
 	} else if e.cursorRow > 0 {
 		// Join with previous line
 		prevLine := e.lines[e.cursorRow-1]
@@ -486,7 +510,7 @@ func (e *Editor) deleteBackward() {
 		e.lines = newLines
 
 		e.cursorRow--
-		e.cursorCol = len(prevLine)
+		e.cursorCol = runeLen(prevLine)
 	}
 }
 
@@ -496,9 +520,11 @@ func (e *Editor) deleteForward() {
 	}
 
 	line := e.lines[e.cursorRow]
-	if e.cursorCol < len(line) {
-		// Delete character at cursor
-		e.lines[e.cursorRow] = line[:e.cursorCol] + line[e.cursorCol+1:]
+	if e.cursorCol < runeLen(line) {
+		// Delete rune at cursor
+		byteOff := runeToByteOffset(line, e.cursorCol)
+		_, runeSize := utf8.DecodeRuneInString(line[byteOff:])
+		e.lines[e.cursorRow] = line[:byteOff] + line[byteOff+runeSize:]
 	} else if e.cursorRow < len(e.lines)-1 {
 		// Join with next line
 		nextLine := e.lines[e.cursorRow+1]
@@ -527,8 +553,9 @@ func (e *Editor) moveCursorUpVisual() {
 	// Try to keep same visual column position
 	localCol := e.cursorCol - vlines[curVRow].colOffset
 	newCol := prev.colOffset + localCol
-	if newCol > prev.colOffset+len(prev.text) {
-		newCol = prev.colOffset + len(prev.text)
+	prevRuneLen := runeLen(prev.text)
+	if newCol > prev.colOffset+prevRuneLen {
+		newCol = prev.colOffset + prevRuneLen
 	}
 	e.cursorCol = newCol
 }
@@ -548,29 +575,30 @@ func (e *Editor) moveCursorDownVisual() {
 	// Try to keep same visual column position
 	localCol := e.cursorCol - vlines[curVRow].colOffset
 	newCol := next.colOffset + localCol
-	if newCol > next.colOffset+len(next.text) {
-		newCol = next.colOffset + len(next.text)
+	nextRuneLen := runeLen(next.text)
+	if newCol > next.colOffset+nextRuneLen {
+		newCol = next.colOffset + nextRuneLen
 	}
 	e.cursorCol = newCol
 }
 
-// moveCursorLeft moves the cursor one character to the left, wrapping to the
+// moveCursorLeft moves the cursor one rune to the left, wrapping to the
 // end of the previous line if at column 0. Does NOT clear selection.
 func (e *Editor) moveCursorLeft() {
 	if e.cursorCol > 0 {
 		e.cursorCol--
 	} else if e.cursorRow > 0 {
 		e.cursorRow--
-		e.cursorCol = len(e.lines[e.cursorRow])
+		e.cursorCol = runeLen(e.lines[e.cursorRow])
 	}
 }
 
-// moveCursorRight moves the cursor one character to the right, wrapping to
+// moveCursorRight moves the cursor one rune to the right, wrapping to
 // the start of the next line if at end of line. Does NOT clear selection.
 func (e *Editor) moveCursorRight() {
 	if e.cursorRow < len(e.lines) {
-		lineLen := len(e.lines[e.cursorRow])
-		if e.cursorCol < lineLen {
+		lineRuneLen := runeLen(e.lines[e.cursorRow])
+		if e.cursorCol < lineRuneLen {
 			e.cursorCol++
 		} else if e.cursorRow < len(e.lines)-1 {
 			e.cursorRow++
@@ -587,7 +615,7 @@ func (e *Editor) moveCursorToLineStart() {
 // moveCursorToLineEnd moves the cursor to the end of the current line. Does NOT clear selection.
 func (e *Editor) moveCursorToLineEnd() {
 	if e.cursorRow < len(e.lines) {
-		e.cursorCol = len(e.lines[e.cursorRow])
+		e.cursorCol = runeLen(e.lines[e.cursorRow])
 	}
 }
 
@@ -609,16 +637,17 @@ func (e *Editor) extendSelection(fromRow, fromCol int) {
 	}
 }
 
-// isWordChar returns true for characters considered part of a "word" (letters,
+// isWordRune returns true for runes considered part of a "word" (letters,
 // digits, underscore). Everything else is a boundary.
-func isWordChar(ch byte) bool {
-	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-		(ch >= '0' && ch <= '9') || ch == '_'
+func isWordRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') || r == '_'
 }
 
 // wordBoundaryLeft returns the (row, col) position at the start of the previous
 // word from the given position. Skips whitespace/punctuation backward, then skips
 // word characters backward. Wraps across line boundaries.
+// col is a rune offset.
 func (e *Editor) wordBoundaryLeft(row, col int) (newRow, newCol int) {
 	if len(e.lines) == 0 {
 		return 0, 0
@@ -630,13 +659,13 @@ func (e *Editor) wordBoundaryLeft(row, col int) (newRow, newCol int) {
 			return 0, 0
 		}
 		row--
-		col = len(e.lines[row])
+		col = runeLen(e.lines[row])
 	}
 
-	line := e.lines[row]
+	runes := []rune(e.lines[row])
 
-	// Skip non-word characters backward (whitespace, punctuation)
-	for col > 0 && !isWordChar(line[col-1]) {
+	// Skip non-word runes backward (whitespace, punctuation)
+	for col > 0 && !isWordRune(runes[col-1]) {
 		col--
 	}
 
@@ -646,16 +675,16 @@ func (e *Editor) wordBoundaryLeft(row, col int) (newRow, newCol int) {
 			return 0, 0
 		}
 		row--
-		col = len(e.lines[row])
-		line = e.lines[row]
-		// Skip trailing non-word chars on previous line
-		for col > 0 && !isWordChar(line[col-1]) {
+		runes = []rune(e.lines[row])
+		col = len(runes)
+		// Skip trailing non-word runes on previous line
+		for col > 0 && !isWordRune(runes[col-1]) {
 			col--
 		}
 	}
 
-	// Skip word characters backward
-	for col > 0 && isWordChar(line[col-1]) {
+	// Skip word runes backward
+	for col > 0 && isWordRune(runes[col-1]) {
 		col--
 	}
 
@@ -665,30 +694,31 @@ func (e *Editor) wordBoundaryLeft(row, col int) (newRow, newCol int) {
 // wordBoundaryRight returns the (row, col) position at the start of the next
 // word from the given position. Skips word characters forward, then skips
 // whitespace/punctuation forward. Wraps across line boundaries.
+// col is a rune offset.
 func (e *Editor) wordBoundaryRight(row, col int) (newRow, newCol int) {
 	if len(e.lines) == 0 {
 		return 0, 0
 	}
 
-	line := e.lines[row]
+	runes := []rune(e.lines[row])
 
 	// If at end of line, wrap to start of next line
-	if col >= len(line) {
+	if col >= len(runes) {
 		if row >= len(e.lines)-1 {
 			return row, col
 		}
 		row++
 		col = 0
-		line = e.lines[row]
+		runes = []rune(e.lines[row])
 	}
 
-	// Skip word characters forward
-	for col < len(line) && isWordChar(line[col]) {
+	// Skip word runes forward
+	for col < len(runes) && isWordRune(runes[col]) {
 		col++
 	}
 
-	// Skip non-word characters forward (whitespace, punctuation)
-	for col < len(line) && !isWordChar(line[col]) {
+	// Skip non-word runes forward (whitespace, punctuation)
+	for col < len(runes) && !isWordRune(runes[col]) {
 		col++
 	}
 
@@ -819,20 +849,22 @@ func (e *Editor) renderViewMode(visibleLines int) string {
 	return b.String()
 }
 
-// wrapLine splits a logical line into visual lines at word boundaries.
-// If a word is longer than maxWidth, it falls back to character-level wrapping.
+// wrapLine splits a logical line into visual lines at word boundaries,
+// using rune count for width measurement. If a word is longer than maxWidth
+// runes, it falls back to character-level wrapping at rune boundaries.
 func wrapLine(line string, maxWidth int) []string {
 	if maxWidth <= 0 {
 		maxWidth = 10
 	}
-	if len(line) <= maxWidth {
+	runes := []rune(line)
+	if len(runes) <= maxWidth {
 		return []string{line}
 	}
 
 	var result []string
-	remaining := line
+	remaining := runes
 	for len(remaining) > maxWidth {
-		// Find the last space within maxWidth
+		// Find the last space within maxWidth runes
 		splitAt := -1
 		for i := maxWidth; i >= 0; i-- {
 			if i < len(remaining) && remaining[i] == ' ' {
@@ -842,15 +874,15 @@ func wrapLine(line string, maxWidth int) []string {
 		}
 
 		if splitAt <= 0 {
-			// No space found — hard wrap at maxWidth
-			result = append(result, remaining[:maxWidth])
+			// No space found — hard wrap at maxWidth runes
+			result = append(result, string(remaining[:maxWidth]))
 			remaining = remaining[maxWidth:]
 		} else {
-			result = append(result, remaining[:splitAt])
+			result = append(result, string(remaining[:splitAt]))
 			remaining = remaining[splitAt+1:] // skip the space
 		}
 	}
-	result = append(result, remaining)
+	result = append(result, string(remaining))
 	return result
 }
 
@@ -863,6 +895,7 @@ type visualLine struct {
 }
 
 // buildVisualLines builds the full list of visual (wrapped) lines for the editor.
+// colOffset is tracked in rune count (matching cursorCol semantics).
 func (e *Editor) buildVisualLines(maxLineWidth int) []visualLine {
 	var vlines []visualLine
 	for i, line := range e.lines {
@@ -875,7 +908,7 @@ func (e *Editor) buildVisualLines(maxLineWidth int) []visualLine {
 				text:       seg,
 				colOffset:  offset,
 			})
-			offset += len(seg)
+			offset += runeLen(seg)
 			if j < len(wrapped)-1 {
 				offset++ // account for the space consumed by word wrap split
 			}
@@ -888,13 +921,14 @@ func (e *Editor) buildVisualLines(maxLineWidth int) []visualLine {
 }
 
 // cursorVisualRow returns the visual row index where the cursor currently sits.
+// logicalCol is in rune offset (matching cursorCol and colOffset semantics).
 func cursorVisualRow(vlines []visualLine, logicalRow, logicalCol int) int {
 	for i, vl := range vlines {
 		if vl.logicalRow != logicalRow {
 			continue
 		}
-		// Check if cursor falls within this visual line segment
-		segEnd := vl.colOffset + len(vl.text)
+		// Check if cursor falls within this visual line segment (rune-based)
+		segEnd := vl.colOffset + runeLen(vl.text)
 		if logicalCol >= vl.colOffset && logicalCol <= segEnd {
 			return i
 		}
@@ -969,21 +1003,23 @@ func (e *Editor) renderEditMode(visibleLines int) string {
 
 		// Determine cursor position on this visual line (if any)
 		hasCursor := i == cursorVRow
+		vlRunes := []rune(vl.text)
+		vlRuneLen := len(vlRunes)
 		localCursorCol := -1
 		if hasCursor {
 			localCursorCol = e.cursorCol - vl.colOffset
 			if localCursorCol < 0 {
 				localCursorCol = 0
 			}
-			if localCursorCol > len(vl.text) {
-				localCursorCol = len(vl.text)
+			if localCursorCol > vlRuneLen {
+				localCursorCol = vlRuneLen
 			}
 		}
 
 		// Render each character with the appropriate style
 		switch {
 		case e.hasSelection:
-			// Selection-aware rendering: batch consecutive same-styled characters
+			// Selection-aware rendering: batch consecutive same-styled runes
 			// into single Render() calls to avoid per-character ANSI escape sequences
 			// that can confuse lipgloss's word wrapper (cellbuf.Wrap).
 			const (
@@ -998,28 +1034,28 @@ func (e *Editor) renderEditMode(visibleLines int) string {
 			var runs []styledRun
 			curRunType := -1
 
-			for j := 0; j <= len(vl.text); j++ {
+			for j := 0; j <= vlRuneLen; j++ {
 				logCol := vl.colOffset + j
 				var ch string
 				var rt int
 
 				switch {
 				case hasCursor && j == localCursorCol:
-					if j >= len(vl.text) {
+					if j >= vlRuneLen {
 						ch = " "
 					} else {
-						ch = string(vl.text[j])
+						ch = string(vlRunes[j])
 					}
 					rt = runCursor
-				case j < len(vl.text):
-					ch = string(vl.text[j])
+				case j < vlRuneLen:
+					ch = string(vlRunes[j])
 					if e.isInSelection(vl.logicalRow, logCol) {
 						rt = runSelection
 					} else {
 						rt = runNormal
 					}
 				default:
-					continue // j == len(vl.text) and no cursor
+					continue // j == vlRuneLen and no cursor
 				}
 
 				if rt != curRunType {
@@ -1041,13 +1077,13 @@ func (e *Editor) renderEditMode(visibleLines int) string {
 			}
 		case hasCursor:
 			// No selection, but cursor is on this line
-			if localCursorCol >= len(vl.text) {
+			if localCursorCol >= vlRuneLen {
 				b.WriteString(e.theme.Normal.Render(vl.text))
 				b.WriteString(cursorStyle.Render(" "))
 			} else {
-				before := vl.text[:localCursorCol]
-				cursor := string(vl.text[localCursorCol])
-				after := vl.text[localCursorCol+1:]
+				before := string(vlRunes[:localCursorCol])
+				cursor := string(vlRunes[localCursorCol])
+				after := string(vlRunes[localCursorCol+1:])
 				b.WriteString(e.theme.Normal.Render(before))
 				b.WriteString(cursorStyle.Render(cursor))
 				b.WriteString(e.theme.Normal.Render(after))
@@ -1228,6 +1264,7 @@ func (e *Editor) isInSelection(row, col int) bool {
 // deleteSelection removes all text in the current selection and positions the
 // cursor at the start of the former selection. Returns true if a selection was
 // deleted, false if there was no selection.
+// sc and ec are rune offsets.
 func (e *Editor) deleteSelection() bool {
 	if !e.hasSelection {
 		return false
@@ -1236,29 +1273,36 @@ func (e *Editor) deleteSelection() bool {
 	sr, sc, er, ec := e.selectionRange()
 
 	if sr == er {
-		// Single-line selection: remove characters [sc, ec) from that line
+		// Single-line selection: remove runes [sc, ec) from that line
 		line := e.lines[sr]
-		if sc > len(line) {
-			sc = len(line)
+		lineRuneLen := runeLen(line)
+		if sc > lineRuneLen {
+			sc = lineRuneLen
 		}
-		if ec > len(line) {
-			ec = len(line)
+		if ec > lineRuneLen {
+			ec = lineRuneLen
 		}
-		e.lines[sr] = line[:sc] + line[ec:]
+		scByte := runeToByteOffset(line, sc)
+		ecByte := runeToByteOffset(line, ec)
+		e.lines[sr] = line[:scByte] + line[ecByte:]
 	} else {
 		// Multi-line selection: keep prefix of start line + suffix of end line,
 		// remove everything in between.
 		startLine := e.lines[sr]
 		endLine := e.lines[er]
 
-		if sc > len(startLine) {
-			sc = len(startLine)
+		startRuneLen := runeLen(startLine)
+		endRuneLen := runeLen(endLine)
+		if sc > startRuneLen {
+			sc = startRuneLen
 		}
-		if ec > len(endLine) {
-			ec = len(endLine)
+		if ec > endRuneLen {
+			ec = endRuneLen
 		}
 
-		merged := startLine[:sc] + endLine[ec:]
+		scByte := runeToByteOffset(startLine, sc)
+		ecByte := runeToByteOffset(endLine, ec)
+		merged := startLine[:scByte] + endLine[ecByte:]
 		newLines := make([]string, 0, len(e.lines)-(er-sr))
 		newLines = append(newLines, e.lines[:sr]...)
 		newLines = append(newLines, merged)
@@ -1273,6 +1317,7 @@ func (e *Editor) deleteSelection() bool {
 }
 
 // selectedText returns the currently selected text, or empty string if no selection.
+// sc and ec are rune offsets.
 func (e *Editor) selectedText() string {
 	if !e.hasSelection {
 		return ""
@@ -1282,22 +1327,27 @@ func (e *Editor) selectedText() string {
 
 	if sr == er {
 		line := e.lines[sr]
-		if sc > len(line) {
-			sc = len(line)
+		lineRuneLen := runeLen(line)
+		if sc > lineRuneLen {
+			sc = lineRuneLen
 		}
-		if ec > len(line) {
-			ec = len(line)
+		if ec > lineRuneLen {
+			ec = lineRuneLen
 		}
-		return line[sc:ec]
+		scByte := runeToByteOffset(line, sc)
+		ecByte := runeToByteOffset(line, ec)
+		return line[scByte:ecByte]
 	}
 
 	var b strings.Builder
 	// First line: from sc to end
 	firstLine := e.lines[sr]
-	if sc > len(firstLine) {
-		sc = len(firstLine)
+	firstRuneLen := runeLen(firstLine)
+	if sc > firstRuneLen {
+		sc = firstRuneLen
 	}
-	b.WriteString(firstLine[sc:])
+	scByte := runeToByteOffset(firstLine, sc)
+	b.WriteString(firstLine[scByte:])
 
 	// Middle lines: entire lines
 	for i := sr + 1; i < er; i++ {
@@ -1308,10 +1358,12 @@ func (e *Editor) selectedText() string {
 	// Last line: from start to ec
 	b.WriteString("\n")
 	lastLine := e.lines[er]
-	if ec > len(lastLine) {
-		ec = len(lastLine)
+	lastRuneLen := runeLen(lastLine)
+	if ec > lastRuneLen {
+		ec = lastRuneLen
 	}
-	b.WriteString(lastLine[:ec])
+	ecByte := runeToByteOffset(lastLine, ec)
+	b.WriteString(lastLine[:ecByte])
 
 	return b.String()
 }
@@ -1356,8 +1408,9 @@ func (e *Editor) mouseToLogical(screenX, screenY int) (logRow, logCol int) {
 	if col < 0 {
 		col = 0
 	}
-	if col > len(vl.text) {
-		col = len(vl.text)
+	vlRuneLen := runeLen(vl.text)
+	if col > vlRuneLen {
+		col = vlRuneLen
 	}
 
 	return vl.logicalRow, vl.colOffset + col

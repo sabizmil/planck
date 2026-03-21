@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/sabizmil/planck/internal/perf"
 	"github.com/sabizmil/planck/internal/session"
 )
 
@@ -78,6 +79,7 @@ func (t *TmuxBackend) tmuxSessionPrefix() string {
 
 // runTmux executes a tmux command and returns its output.
 func runTmux(args ...string) (string, error) {
+	perf.TmuxCalls.Add(1)
 	cmd := exec.Command("tmux", args...)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimRight(string(out), "\n"), err

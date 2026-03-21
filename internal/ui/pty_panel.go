@@ -192,6 +192,12 @@ type PTYExitedMsg struct {
 	ExitCode  int
 }
 
+// PTYPollMsg is a lightweight message that triggers re-polling without
+// processing content. Sent when a poll cycle detected no content change.
+type PTYPollMsg struct {
+	SessionID string
+}
+
 // keyToBytes converts a tea.KeyMsg to raw bytes for PTY
 func keyToBytes(msg tea.KeyMsg) []byte {
 	switch msg.Type {
@@ -270,7 +276,13 @@ func keyToBytes(msg tea.KeyMsg) []byte {
 	case tea.KeyCtrlEnd:
 		return []byte{0x1b, '[', '1', ';', '5', 'F'}
 	case tea.KeyRunes:
-		return []byte(string(msg.Runes))
+		raw := []byte(string(msg.Runes))
+		// Alt/Option modifier: prepend ESC so e.g. Option+Left (Alt+'b')
+		// sends ESC b (backward-word) instead of bare 'b'.
+		if msg.Alt {
+			raw = append([]byte{0x1b}, raw...)
+		}
+		return raw
 	default:
 		return nil
 	}

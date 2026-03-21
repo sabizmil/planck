@@ -104,6 +104,42 @@ func TestKeyToBytesShiftTab(t *testing.T) {
 	}
 }
 
+func TestKeyToBytesAltRune(t *testing.T) {
+	tests := []struct {
+		name     string
+		rune_    rune
+		expected []byte
+	}{
+		{"Alt+b (Option+Left → backward-word)", 'b', []byte{0x1b, 'b'}},
+		{"Alt+f (Option+Right → forward-word)", 'f', []byte{0x1b, 'f'}},
+		{"Alt+d (kill-word)", 'd', []byte{0x1b, 'd'}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.rune_}, Alt: true}
+			got := keyToBytes(msg)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("keyToBytes() length = %d, want %d; got %v", len(got), len(tt.expected), got)
+			}
+			for i, b := range tt.expected {
+				if got[i] != b {
+					t.Errorf("keyToBytes()[%d] = 0x%02x, want 0x%02x", i, got[i], b)
+				}
+			}
+		})
+	}
+}
+
+func TestKeyToBytesRuneWithoutAlt(t *testing.T) {
+	// Without Alt, runes should pass through without ESC prefix
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}}
+	got := keyToBytes(msg)
+	if len(got) != 1 || got[0] != 'b' {
+		t.Errorf("keyToBytes('b' without Alt) = %v, want [0x62]", got)
+	}
+}
+
 func TestPTYPanelScrollWithNilScrollback(t *testing.T) {
 	// Simulates the tmux backend case: no scrollback buffer, but content
 	// exceeds the viewport height (scrollback is embedded in content).

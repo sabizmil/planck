@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sabizmil/planck/internal/config"
+	"github.com/sabizmil/planck/internal/perf"
 	"github.com/sabizmil/planck/internal/session"
 	"github.com/sabizmil/planck/internal/store"
 	"github.com/sabizmil/planck/internal/ui"
@@ -320,6 +321,8 @@ func (a *App) findAgentTabBySessionID(sessionID string) *AgentTab {
 
 // Update handles messages
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	perf.MessagesTotal.Add(1)
+
 	var cmds []tea.Cmd
 
 	// Handle window size
@@ -485,6 +488,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if msg, ok := msg.(ui.PTYRenderMsg); ok {
+		perf.PtyRenders.Add(1)
 		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
 			// Idle detection: track content changes
 			contentChanged := msg.Content != tab.prevContent
@@ -505,20 +509,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						a.syncTabBar()
 					}
 				}
-			} else if tab.panel.GetStatus() == "running" && !userRecentlyTyped {
-				// Content unchanged — check for state transitions
-
-				// Hook state is checked immediately (no timeout) so permission
-				// prompts get a red dot within one poll cycle (~50ms).
-				if state := a.readHookState(tab); state == "needs_input" {
-					tab.panel.SetStatus("needs_input")
-					a.syncTabBar()
-				} else if !tab.lastContentChange.IsZero() &&
-					time.Since(tab.lastContentChange) > 3*time.Second {
-					// No output for 3s and no hook state — agent is idle
-					tab.panel.SetStatus("idle")
-					a.syncTabBar()
-				}
+			} else {
+				// Content unchanged — check for idle/needs_input transitions
+				a.checkIdleTransition(tab)
 			}
 
 			tab.panel.SetContent(msg.Content)
@@ -538,7 +531,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			cmds = append(cmds, a.pollAgentTab(tab))
+			cmds = append(cmds, a.pollAgentTab(tab, a.pollIntervalForTab(tab)))
+		}
+	}
+
+	// PTYPollMsg: content unchanged — check for idle transitions and re-poll.
+	if msg, ok := msg.(ui.PTYPollMsg); ok {
+		if tab := a.findAgentTabBySessionID(msg.SessionID); tab != nil {
+			a.checkIdleTransition(tab)
+			cmds = append(cmds, a.pollAgentTab(tab, a.pollIntervalForTab(tab)))
 		}
 	}
 
@@ -977,7 +978,7 @@ func (a *App) launchAgentTab(agentKey string) tea.Cmd {
 	a.message = fmt.Sprintf("%s session started", a.computeTabLabel(tab))
 
 	// Start polling
-	return a.pollAgentTab(tab)
+	return a.pollAgentTab(tab, pollFast)
 }
 
 // closeCurrentAgentTab handles the "x" key to close the current agent tab
@@ -1227,8 +1228,45 @@ func (a *App) sortedAgentKeys() []string {
 	return keys
 }
 
+// Poll interval constants for adaptive polling.
+const (
+	pollFast   = 50 * time.Millisecond   // active tab running or user typing
+	pollMedium = 500 * time.Millisecond  // background running or active idle
+	pollSlow   = 1000 * time.Millisecond // background idle/needs_input
+
+	// typingBoostWindow is how long after the last keystroke the active tab
+	// keeps fast polling. This is intentionally longer than the 1s
+	// userRecentlyTyped guard in checkIdleTransition (which prevents
+	// misattributing terminal echo as agent output).
+	typingBoostWindow = 2 * time.Second
+)
+
+// pollIntervalForTab computes the poll interval based on whether the tab
+// is active, the agent's current status, and whether the user is typing.
+func (a *App) pollIntervalForTab(tab *AgentTab) time.Duration {
+	isActive := a.activeAgentTab() == tab
+	status := ""
+	if tab.panel != nil {
+		status = tab.panel.GetStatus()
+	}
+
+	userTyping := !tab.lastUserWrite.IsZero() && time.Since(tab.lastUserWrite) < typingBoostWindow
+
+	switch {
+	case isActive && (status == "running" || userTyping):
+		return pollFast
+	case isActive:
+		return pollMedium
+	case status == "running":
+		return pollMedium
+	default:
+		return pollSlow
+	}
+}
+
 // pollAgentTab returns a tea.Cmd that polls a specific agent tab's PTY
-func (a *App) pollAgentTab(tab *AgentTab) tea.Cmd {
+// after waiting for the given interval.
+func (a *App) pollAgentTab(tab *AgentTab, interval time.Duration) tea.Cmd {
 	if tab.session == nil {
 		return nil
 	}
@@ -1236,9 +1274,11 @@ func (a *App) pollAgentTab(tab *AgentTab) tea.Cmd {
 	handle := tab.session.BackendHandle
 	sessionID := tab.session.ID
 	backend := a.sessionBackend
+	prevContent := tab.prevContent // capture for closure comparison
 
 	return func() tea.Msg {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(interval)
+		perf.Polls.Add(1)
 
 		// Check if session has exited
 		status, err := backend.Status(handle)
@@ -1251,6 +1291,13 @@ func (a *App) pollAgentTab(tab *AgentTab) tea.Cmd {
 		content, err := backend.Render(handle)
 		if err != nil {
 			return ui.PTYRenderMsg{SessionID: sessionID, Content: ""}
+		}
+
+		// Skip sending a full render message if content hasn't changed.
+		// This avoids triggering View() re-renders for no-op poll cycles.
+		if content == prevContent {
+			perf.PollSkips.Add(1)
+			return ui.PTYPollMsg{SessionID: sessionID}
 		}
 
 		// Get window title (set by child process via OSC 0/2 escape sequences)
@@ -1614,6 +1661,12 @@ func (a *App) refreshFiles() {
 
 // View renders the application
 func (a *App) View() string {
+	viewStart := time.Now()
+	defer func() {
+		perf.ViewCalls.Add(1)
+		perf.ViewDurationNs.Add(time.Since(viewStart).Nanoseconds())
+	}()
+
 	if a.quitting {
 		return "Goodbye!\n"
 	}
@@ -1824,6 +1877,40 @@ func hookSettingsJSON(stateFile string) string {
 	// so it runs instantly with no dependencies.
 	cmd := fmt.Sprintf("echo needs_input > %s", stateFile)
 	return fmt.Sprintf(`{"hooks":{"Notification":[{"matcher":"permission_prompt","hooks":[{"type":"command","command":%q}]}]}}`, cmd)
+}
+
+// checkIdleTransition checks whether a running agent tab should transition to
+// "idle" or "needs_input" based on content staleness and hook state. It is
+// called from both the PTYRenderMsg handler (when content is unchanged) and the
+// PTYPollMsg handler (which by definition means content hasn't changed). Returns
+// true if a transition occurred so the caller knows a syncTabBar was triggered.
+func (a *App) checkIdleTransition(tab *AgentTab) bool {
+	if tab.panel.GetStatus() != "running" {
+		return false
+	}
+	// Don't transition while the user is actively typing — terminal echo
+	// from keystrokes can cause brief pauses that aren't real idle periods.
+	if !tab.lastUserWrite.IsZero() && time.Since(tab.lastUserWrite) < 1*time.Second {
+		return false
+	}
+
+	// Hook state is checked immediately (no timeout) so permission
+	// prompts get a red dot within one poll cycle (~50ms).
+	if state := a.readHookState(tab); state == "needs_input" {
+		tab.panel.SetStatus("needs_input")
+		a.syncTabBar()
+		return true
+	}
+
+	// No output for 3s and no hook state — agent is idle.
+	if !tab.lastContentChange.IsZero() &&
+		time.Since(tab.lastContentChange) > 3*time.Second {
+		tab.panel.SetStatus("idle")
+		a.syncTabBar()
+		return true
+	}
+
+	return false
 }
 
 // readHookState reads the hook state file for a tab. Returns the state string

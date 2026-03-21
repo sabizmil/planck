@@ -675,21 +675,22 @@ func TestWordBoundaryRight(t *testing.T) {
 	}
 }
 
-func TestIsWordChar(t *testing.T) {
+func TestIsWordRune(t *testing.T) {
 	tests := []struct {
-		ch   byte
+		ch   rune
 		want bool
 	}{
 		{'a', true}, {'z', true}, {'A', true}, {'Z', true},
 		{'0', true}, {'9', true}, {'_', true},
 		{' ', false}, {'.', false}, {',', false}, {'-', false},
 		{'(', false}, {')', false}, {'\t', false}, {'\n', false},
+		{'☐', false}, {'é', false},
 	}
 
 	for _, tc := range tests {
-		got := isWordChar(tc.ch)
+		got := isWordRune(tc.ch)
 		if got != tc.want {
-			t.Errorf("isWordChar(%q) = %v, want %v", tc.ch, got, tc.want)
+			t.Errorf("isWordRune(%q) = %v, want %v", tc.ch, got, tc.want)
 		}
 	}
 }
@@ -1516,5 +1517,150 @@ func TestEditor_AltSpace_NoInsert(t *testing.T) {
 	got := strings.Join(e.lines, "\n")
 	if got != "hello" {
 		t.Errorf("Alt+Space should not insert text, got %q", got)
+	}
+}
+
+// --- UTF-8 / multi-byte character tests ---
+
+func TestEditor_UTF8_CursorMovement(t *testing.T) {
+	// "☐ hello" — ☐ is 3 bytes but 1 rune
+	e := newTestEditor("☐ hello")
+	e.cursorCol = 0
+
+	// Move right should advance by one rune (past ☐), not one byte
+	e.moveCursorRight()
+	if e.cursorCol != 1 {
+		t.Errorf("after moveCursorRight on ☐, cursorCol = %d, want 1", e.cursorCol)
+	}
+
+	// Move to end
+	e.moveCursorToLineEnd()
+	if e.cursorCol != 7 { // ☐ + space + h,e,l,l,o = 7 runes
+		t.Errorf("moveCursorToLineEnd = %d, want 7", e.cursorCol)
+	}
+
+	// Move left from end should land on 'o'
+	e.moveCursorLeft()
+	if e.cursorCol != 6 {
+		t.Errorf("after moveCursorLeft from end, cursorCol = %d, want 6", e.cursorCol)
+	}
+}
+
+func TestEditor_UTF8_InsertText(t *testing.T) {
+	e := newTestEditor("☐ task")
+	e.cursorCol = 2 // after "☐ "
+
+	e.insertText("✓")
+	got := e.lines[0]
+	if got != "☐ ✓task" {
+		t.Errorf("insertText with emoji, got %q, want %q", got, "☐ ✓task")
+	}
+	if e.cursorCol != 3 { // advanced by 1 rune (✓)
+		t.Errorf("cursorCol after insert = %d, want 3", e.cursorCol)
+	}
+}
+
+func TestEditor_UTF8_DeleteBackward(t *testing.T) {
+	e := newTestEditor("☐ task")
+	e.cursorCol = 1 // after ☐
+
+	e.deleteBackward()
+	got := e.lines[0]
+	if got != " task" {
+		t.Errorf("deleteBackward on multi-byte char, got %q, want %q", got, " task")
+	}
+	if e.cursorCol != 0 {
+		t.Errorf("cursorCol after deleteBackward = %d, want 0", e.cursorCol)
+	}
+}
+
+func TestEditor_UTF8_DeleteForward(t *testing.T) {
+	e := newTestEditor("a☐b")
+	e.cursorCol = 1 // on ☐
+
+	e.deleteForward()
+	got := e.lines[0]
+	if got != "ab" {
+		t.Errorf("deleteForward on multi-byte char, got %q, want %q", got, "ab")
+	}
+}
+
+func TestEditor_UTF8_InsertNewline(t *testing.T) {
+	e := newTestEditor("☐ task")
+	e.cursorCol = 1 // after ☐
+
+	e.insertNewline()
+	if len(e.lines) != 2 {
+		t.Fatalf("expected 2 lines after insertNewline, got %d", len(e.lines))
+	}
+	if e.lines[0] != "☐" {
+		t.Errorf("line 0 = %q, want %q", e.lines[0], "☐")
+	}
+	if e.lines[1] != " task" {
+		t.Errorf("line 1 = %q, want %q", e.lines[1], " task")
+	}
+}
+
+func TestEditor_UTF8_WrapLine(t *testing.T) {
+	// A line with multi-byte chars that fits in 10 runes shouldn't be wrapped
+	line := "☐☑☐☑☐☑☐☑☐☑" // 10 runes, 30 bytes
+	result := wrapLine(line, 10)
+	if len(result) != 1 {
+		t.Errorf("wrapLine should not wrap 10-rune line at maxWidth=10, got %d segments", len(result))
+	}
+
+	// A line with 12 runes should be wrapped at 10
+	line = "☐☑☐☑☐☑☐☑☐☑ab"
+	result = wrapLine(line, 10)
+	if len(result) != 2 {
+		t.Errorf("wrapLine should wrap 12-rune line at maxWidth=10, got %d segments", len(result))
+	}
+}
+
+func TestEditor_UTF8_WordBoundary(t *testing.T) {
+	e := newTestEditor("café résumé")
+	e.cursorCol = 0
+
+	// Word boundary right should jump to after "café" then skip space to "résumé"
+	_, col := e.wordBoundaryRight(0, 0)
+	if col != 5 { // "café " = 5 runes, next word starts at 5
+		t.Errorf("wordBoundaryRight from 0 = %d, want 5", col)
+	}
+}
+
+func TestEditor_UTF8_Selection(t *testing.T) {
+	e := newTestEditor("a☐b☑c")
+	// Select runes 1-3 (☐b)
+	e.selAnchorRow = 0
+	e.selAnchorCol = 1
+	e.selEndRow = 0
+	e.selEndCol = 3
+	e.hasSelection = true
+
+	selected := e.selectedText()
+	if selected != "☐b" {
+		t.Errorf("selectedText = %q, want %q", selected, "☐b")
+	}
+}
+
+func TestRuneHelpers(t *testing.T) {
+	s := "a☐b" // a(1 byte) + ☐(3 bytes) + b(1 byte)
+
+	if runeLen(s) != 3 {
+		t.Errorf("runeLen(%q) = %d, want 3", s, runeLen(s))
+	}
+
+	// runeToByteOffset: rune 0 → byte 0, rune 1 → byte 1, rune 2 → byte 4
+	if off := runeToByteOffset(s, 0); off != 0 {
+		t.Errorf("runeToByteOffset(0) = %d, want 0", off)
+	}
+	if off := runeToByteOffset(s, 1); off != 1 {
+		t.Errorf("runeToByteOffset(1) = %d, want 1", off)
+	}
+	if off := runeToByteOffset(s, 2); off != 4 {
+		t.Errorf("runeToByteOffset(2) = %d, want 4", off)
+	}
+	if off := runeToByteOffset(s, 3); off != 5 {
+		t.Errorf("runeToByteOffset(3) = %d, want 5 (len)", off)
 	}
 }
