@@ -78,7 +78,7 @@ type Planning struct {
 // Session configures session backend
 type Session struct {
 	// Backend specifies the session backend to use: "tmux", "pty", or "auto"
-	// "auto" will prefer PTY if available, falling back to tmux
+	// "auto" will prefer tmux if available, falling back to PTY
 	Backend string `toml:"backend"`
 }
 

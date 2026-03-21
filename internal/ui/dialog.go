@@ -264,6 +264,7 @@ func (d *Dialog) ShowInput(title, message string, onClose func(DialogResult)) {
 func (d *Dialog) ShowSelect(title string, options []DialogOption, onClose func(DialogResult)) {
 	d.dtype = DialogSelect
 	d.title = title
+	d.message = ""
 	d.options = options
 	d.cursor = 0
 	d.visible = true
@@ -274,6 +275,7 @@ func (d *Dialog) ShowSelect(title string, options []DialogOption, onClose func(D
 func (d *Dialog) ShowScopePicker(taskCount, phaseCount, totalTasks int, onClose func(DialogResult)) {
 	d.dtype = DialogScopePicker
 	d.title = "Execute Plan"
+	d.message = ""
 	d.options = []DialogOption{
 		{Label: "This task only", Description: "Run just the selected task"},
 		{Label: fmt.Sprintf("Current phase (%d tasks)", taskCount), Description: "Complete all tasks in this phase"},
@@ -288,6 +290,7 @@ func (d *Dialog) ShowScopePicker(taskCount, phaseCount, totalTasks int, onClose 
 func (d *Dialog) ShowPermissionDialog(onClose func(DialogResult)) {
 	d.dtype = DialogPermission
 	d.title = "Pre-approve Permissions"
+	d.message = ""
 	d.visible = true
 	d.onClose = onClose
 }

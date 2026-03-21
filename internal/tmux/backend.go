@@ -265,18 +265,25 @@ func (t *TmuxBackend) Capture(handle string, lines int) (string, error) {
 	return out, nil
 }
 
-// Render returns the current terminal content with ANSI styles.
-// For tmux, this captures the visible pane content.
+// Render returns the current terminal content with ANSI styles, including
+// scrollback history. For tmux, this captures the pane content plus up to
+// 5000 lines of scrollback so the UI can scroll through past output.
 func (t *TmuxBackend) Render(handle string) (string, error) {
 	sess := t.getSession(handle)
 	if sess == nil {
 		return "", fmt.Errorf("session not found: %s", handle)
 	}
 
-	out, err := runTmux("capture-pane", "-e", "-p", "-t", sess.tmuxName)
+	out, err := runTmux("capture-pane", "-e", "-p", "-S", "-5000", "-t", sess.tmuxName)
 	if err != nil {
 		return "", fmt.Errorf("render pane: %w", err)
 	}
+
+	// Strip trailing empty lines that tmux emits when scrollback is shorter
+	// than the requested range. Without this, the panel shows excess blank
+	// space at the top.
+	out = strings.TrimRight(out, "\n")
+
 	return out, nil
 }
 

@@ -311,3 +311,71 @@ func TestDialogEscCancel(t *testing.T) {
 		t.Error("Escape should cancel")
 	}
 }
+
+func TestDialog_ShowSelect_ClearsStaleMessage(t *testing.T) {
+	theme := DefaultTheme()
+	dialog := NewDialog(theme)
+	dialog.SetSize(80, 24)
+
+	// First show a confirm dialog (sets message)
+	dialog.ShowConfirm("Delete File?", "Delete 'test.md'?", func(r DialogResult) {})
+	dialog.Update(tea.KeyMsg{Type: tea.KeyEscape}) // dismiss
+
+	// Now show a select dialog
+	dialog.ShowSelect("New Agent", []DialogOption{
+		{Label: "Claude", Description: "claude"},
+	}, func(r DialogResult) {})
+
+	if dialog.message != "" {
+		t.Errorf("ShowSelect should clear stale message, got %q", dialog.message)
+	}
+
+	// Verify the rendered view does not contain the old message
+	view := dialog.View()
+	if contains(view, "Delete") {
+		t.Error("Select dialog should not show stale 'Delete' message from previous confirm dialog")
+	}
+}
+
+func TestDialog_ShowScopePicker_ClearsStaleMessage(t *testing.T) {
+	theme := DefaultTheme()
+	dialog := NewDialog(theme)
+	dialog.SetSize(80, 24)
+
+	dialog.ShowConfirm("Delete?", "Delete 'foo.md'?", func(r DialogResult) {})
+	dialog.Update(tea.KeyMsg{Type: tea.KeyEscape})
+
+	dialog.ShowScopePicker(3, 1, 5, func(r DialogResult) {})
+
+	if dialog.message != "" {
+		t.Errorf("ShowScopePicker should clear stale message, got %q", dialog.message)
+	}
+}
+
+func TestDialog_ShowPermission_ClearsStaleMessage(t *testing.T) {
+	theme := DefaultTheme()
+	dialog := NewDialog(theme)
+	dialog.SetSize(80, 24)
+
+	dialog.ShowConfirm("Delete?", "Delete 'foo.md'?", func(r DialogResult) {})
+	dialog.Update(tea.KeyMsg{Type: tea.KeyEscape})
+
+	dialog.ShowPermissionDialog(func(r DialogResult) {})
+
+	if dialog.message != "" {
+		t.Errorf("ShowPermissionDialog should clear stale message, got %q", dialog.message)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchString(s, substr)
+}
+
+func searchString(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

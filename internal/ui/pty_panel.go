@@ -127,12 +127,11 @@ func (p *PTYPanel) Update(msg tea.Msg) (*PTYPanel, tea.Cmd) {
 	return p, nil
 }
 
-// scrollUp scrolls up by n lines, clamped to scrollback length.
+// scrollUp scrolls up by n lines, clamped to the maximum scrollable offset.
 func (p *PTYPanel) scrollUp(n int) {
 	p.scrollOffset += n
-	maxOffset := p.scrollbackLen()
-	if p.scrollOffset > maxOffset {
-		p.scrollOffset = maxOffset
+	if maxOff := p.maxScrollOffset(); p.scrollOffset > maxOff {
+		p.scrollOffset = maxOff
 	}
 }
 
@@ -144,9 +143,26 @@ func (p *PTYPanel) scrollDown(n int) {
 	}
 }
 
-// scrollToTop scrolls to the top of the scrollback buffer.
+// scrollToTop scrolls to the top of all available content.
 func (p *PTYPanel) scrollToTop() {
-	p.scrollOffset = p.scrollbackLen()
+	p.scrollOffset = p.maxScrollOffset()
+}
+
+// maxScrollOffset returns the maximum scroll offset based on total content
+// (scrollback buffer + screen lines) minus the viewport height. This allows
+// scrolling through both the scrollback buffer (PTY backend) and content
+// that exceeds the viewport (tmux backend, where scrollback is embedded
+// in the rendered content).
+func (p *PTYPanel) maxScrollOffset() int {
+	screenLines := strings.Count(p.content, "\n") + 1
+	if p.content == "" {
+		screenLines = 0
+	}
+	maxOff := p.scrollbackLen() + screenLines - p.height
+	if maxOff < 0 {
+		return 0
+	}
+	return maxOff
 }
 
 // scrollbackLen returns the number of lines in the scrollback buffer, or 0.
